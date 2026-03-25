@@ -197,7 +197,7 @@ def skill():
             return jsonify({
                 "version": "2.0",
                 "template": {
-                    "outputs": [{"simpleText": {"text": "⚠️ 오류가 발생했습니다. 잠시 후 다시 시도해주세요."}}]
+                    "outputs": [{"simpleText": {"text": f"⚠️ 오류: {str(e)[:300]}"}}]
                 }
             })
 
