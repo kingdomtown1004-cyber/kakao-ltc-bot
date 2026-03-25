@@ -91,8 +91,8 @@ def ask_claude(question):
     content.append({"type": "text", "text": question})
 
     response = ai.beta.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=2048,
+        model="claude-haiku-4-5",
+        max_tokens=1024,
         system=(
             "당신은 노인장기요양보험 평가 전문가입니다. "
             "제공된 2026년 장기요양 평가 매뉴얼 문서를 바탕으로 "
