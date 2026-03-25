@@ -139,51 +139,59 @@ def build_context(question: str) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
-SYSTEM_BASE = (
+SYSTEM_DETAIL = (
     "당신은 노인장기요양보험 평가 전문가입니다. "
     "제공된 2026년 장기요양 평가 자료를 바탕으로 정확하고 친절하게 한국어로 답변해주세요. "
     "평가기준, 판단 방법, 주의사항, 실무 예시 등을 포함하여 실무에 도움이 되도록 상세하게 답변하세요. "
     "답변은 항목별로 구조화하여 읽기 쉽게 작성하고, 자료에 없는 내용은 '자료에서 확인되지 않습니다'라고 하세요."
 )
 
-
-def format_indicator_answer(ind: dict, question: str) -> str:
-    """지표 DB에서 즉시 포맷된 답변 생성 (Claude 없이)"""
-    lines = [
-        f"📋 지표 {ind['no']}번: {ind['name']}",
-        "",
-        "✅ 평가기준",
-    ]
-    for c in ind["criteria"]:
-        lines.append(f"  {c}")
-    lines.append("")
-    lines.append(f"📌 적용 급여: {ind['note']}")
-
-    # 면담 예시 추가 (전체 텍스트에서 검색)
-    qa_section = search_text([ind["name"]] + [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]], max_chars=1500)
-    if qa_section:
-        lines.append("")
-        lines.append("💬 관련 Q&A")
-        lines.append(qa_section[:1200])
-
-    return "\n".join(lines)
+SYSTEM_FAST = (
+    "당신은 노인장기요양보험 평가 전문가입니다. "
+    "제공된 2026년 장기요양 평가 자료를 바탕으로 한국어로 답변해주세요. "
+    "핵심 내용 위주로 간결하게(400자 이내) 답변하고, 자료에 없는 내용은 '자료에서 확인되지 않습니다'라고 하세요."
+)
 
 
-def ask_claude(question: str) -> str:
-    context = build_context(question)
-    system = f"{SYSTEM_BASE}\n\n[평가 자료]\n{context}"
+def ask_claude(question: str, detailed: bool = False) -> str:
+    if detailed:
+        context = build_context(question)
+        system = f"{SYSTEM_DETAIL}\n\n[평가 자료]\n{context}"
+        max_tok = 1500
+    else:
+        # 빠른 경로: 컨텍스트 절반, 토큰 적게
+        ind = find_indicator(question)
+        keywords = []
+        if ind:
+            keywords.append(ind["name"])
+            keywords += [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]]
+        keywords += [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 3]
+        ind_text = (
+            f"[지표 {ind['no']}번: {ind['name']}]\n"
+            f"평가기준: {', '.join(ind['criteria'])}\n"
+            f"적용 급여: {ind['note']}\n"
+        ) if ind else ""
+        relevant = search_text(keywords, max_chars=2000) if keywords else ""
+        parts = []
+        if ind_text:
+            parts.append(ind_text)
+        if relevant:
+            parts.append(f"[관련 자료]\n{relevant}")
+        context = "\n\n".join(parts)
+        system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
+        max_tok = 500
+
     response = ai.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1500,
+        max_tokens=max_tok,
         system=system,
         messages=[{"role": "user", "content": question}],
     )
     return response.content[0].text
 
 
-def get_answer(question: str) -> str:
-    """모든 질문을 Claude로 처리 (자료 기반 상세 답변)"""
-    return ask_claude(question)
+def get_answer(question: str, detailed: bool = False) -> str:
+    return ask_claude(question, detailed=detailed)
 
 
 def send_callback(callback_url, answer):
@@ -204,7 +212,7 @@ def send_callback(callback_url, answer):
 
 def process_in_background(question, callback_url):
     try:
-        answer = get_answer(question)
+        answer = get_answer(question, detailed=True)
         send_callback(callback_url, answer)
     except Exception as e:
         logger.error(f"처리 오류: {e}")
@@ -237,7 +245,7 @@ def skill():
         })
     else:
         try:
-            answer = get_answer(question)
+            answer = get_answer(question, detailed=False)
             if len(answer) > 4000:
                 answer = answer[:3990] + "\n\n...(이하 생략)"
             return jsonify({
