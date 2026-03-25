@@ -120,11 +120,14 @@ def build_context(question: str) -> str:
     keywords += [w for w in question_words if len(w) >= 3]
 
     if ind:
-        ind_text = (
-            f"[지표 {ind['no']}번: {ind['name']}]\n"
-            f"평가기준: {', '.join(ind['criteria'])}\n"
-            f"적용 급여: {ind['note']}\n"
-        )
+        ind_parts = [
+            f"[지표 {ind['no']}번: {ind['name']}]",
+            f"평가기준: {', '.join(ind['criteria'])}",
+        ]
+        if ind.get("detail"):
+            ind_parts.append(ind["detail"])
+        ind_parts.append(f"적용 급여: {ind['note']}")
+        ind_text = "\n".join(ind_parts)
     else:
         ind_text = ""
 
@@ -166,11 +169,17 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             keywords.append(ind["name"])
             keywords += [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]]
         keywords += [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 3]
-        ind_text = (
-            f"[지표 {ind['no']}번: {ind['name']}]\n"
-            f"평가기준: {', '.join(ind['criteria'])}\n"
-            f"적용 급여: {ind['note']}\n"
-        ) if ind else ""
+        if ind:
+            _parts = [
+                f"[지표 {ind['no']}번: {ind['name']}]",
+                f"평가기준: {', '.join(ind['criteria'])}",
+            ]
+            if ind.get("detail"):
+                _parts.append(ind["detail"])
+            _parts.append(f"적용 급여: {ind['note']}")
+            ind_text = "\n".join(_parts)
+        else:
+            ind_text = ""
         relevant = search_text(keywords, max_chars=2000) if keywords else ""
         parts = []
         if ind_text:
