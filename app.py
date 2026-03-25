@@ -64,8 +64,21 @@ def find_indicator(question: str):
     return None
 
 
+def is_toc_line(text: str) -> bool:
+    """목차 라인 여부 판단 (점선이 많으면 목차)"""
+    dot_count = text.count('·') + text.count('…') + text.count('.')
+    return dot_count > len(text) * 0.2
+
+
+def clean_chunk(text: str) -> str:
+    """목차 줄 제거 및 공백 정리"""
+    lines = text.splitlines()
+    cleaned = [l for l in lines if not is_toc_line(l) and len(l.strip()) > 1]
+    return '\n'.join(cleaned).strip()
+
+
 def search_text(keywords: list, max_chars: int = 4000) -> str:
-    """전체 PDF 텍스트에서 키워드 관련 단락 수집"""
+    """전체 PDF 텍스트에서 키워드 관련 단락 수집 (목차 제외)"""
     collected = []
     seen = set()
     for keyword in keywords:
@@ -74,10 +87,13 @@ def search_text(keywords: list, max_chars: int = 4000) -> str:
             idx = ALL_TEXT.find(keyword, start)
             if idx < 0:
                 break
-            # 앞뒤 문단 포함
             chunk_start = max(0, idx - 200)
             chunk_end = min(len(ALL_TEXT), idx + 800)
-            chunk = ALL_TEXT[chunk_start:chunk_end].strip()
+            raw = ALL_TEXT[chunk_start:chunk_end]
+            chunk = clean_chunk(raw)
+            if len(chunk) < 50:  # 정리 후 너무 짧으면 스킵
+                start = idx + 1
+                continue
             key = chunk[:80]
             if key not in seen:
                 seen.add(key)
@@ -125,10 +141,12 @@ def build_context(question: str) -> str:
 
 SYSTEM_BASE = (
     "당신은 노인장기요양보험 평가 전문가입니다. "
-    "제공된 2026년 장기요양 평가 자료를 바탕으로 "
-    "정확하고 친절하게 한국어로 답변해주세요. "
-    "자료에 명시된 내용은 구체적으로 인용하고, "
-    "자료에 없는 내용은 솔직하게 모른다고 말씀해주세요."
+    "제공된 2026년 장기요양 평가 자료를 바탕으로 정확하고 친절하게 한국어로 답변해주세요.\n"
+    "답변 형식:\n"
+    "- 지표명과 번호를 명시\n"
+    "- 평가기준을 항목별로 구체적으로 설명\n"
+    "- 실제 확인 방법(서류, 면담 등) 포함\n"
+    "- 자료에 없는 내용은 솔직하게 모른다고 말씀해주세요."
 )
 
 
@@ -159,7 +177,7 @@ def ask_claude(question: str) -> str:
     system = f"{SYSTEM_BASE}\n\n[평가 자료]\n{context}"
     response = ai.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=600,
+        max_tokens=800,
         system=system,
         messages=[{"role": "user", "content": question}],
     )
@@ -167,12 +185,7 @@ def ask_claude(question: str) -> str:
 
 
 def get_answer(question: str) -> str:
-    """지표 직접 조회 → 즉시 응답, 아니면 Claude 호출"""
-    ind = find_indicator(question)
-    if ind and ind["criteria"]:
-        # 지표 번호/이름이 명확히 매칭되면 DB에서 즉시 응답
-        return format_indicator_answer(ind, question)
-    # 일반 질문은 Claude 호출
+    """모든 질문을 Claude로 처리 (자료 기반 상세 답변)"""
     return ask_claude(question)
 
 
