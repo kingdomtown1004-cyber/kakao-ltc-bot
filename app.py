@@ -22,14 +22,15 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"].strip()
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 PDF_FILES = [
-    "2026_home_bath_evaluation_manual_2.pdf",
-    "2026_home_benefit_indicators_freq_2.pdf",
-    "2026_home_care_benefit_manual_freq_2.pdf",
-    "2026_home_care_evaluation_manual_1.pdf",
-    "2026_home_care_indicators_freq_1.pdf",
-    "attach_1_2026_home_care_manual_qa_case_v2.pdf",
-    "attach_2_2026_home_care_manual_qa_compare.pdf",
-    "evaluation_questionnaire.pdf",
+    "evaluation_questionnaire.pdf",                   # 0.34MB
+    "attach_2_2026_home_care_manual_qa_compare.pdf",  # 0.43MB
+    "attach_1_2026_home_care_manual_qa_case_v2.pdf",  # 1.03MB
+    "2026_home_benefit_indicators_freq_2.pdf",         # 1.44MB
+    "2026_home_care_indicators_freq_1.pdf",            # 2.05MB
+    # 아래 대형 PDF(5MB+)는 100페이지 제한 초과로 제외
+    # "2026_home_bath_evaluation_manual_2.pdf",
+    # "2026_home_care_evaluation_manual_1.pdf",
+    # "2026_home_care_benefit_manual_freq_2.pdf",
 ]
 
 # 전역 파일 ID 캐시 (모듈 로드 시 초기화 → gunicorn에서도 실행됨)
