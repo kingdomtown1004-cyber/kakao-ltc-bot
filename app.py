@@ -141,12 +141,9 @@ def build_context(question: str) -> str:
 
 SYSTEM_BASE = (
     "당신은 노인장기요양보험 평가 전문가입니다. "
-    "제공된 2026년 장기요양 평가 자료를 바탕으로 정확하고 친절하게 한국어로 답변해주세요.\n"
-    "답변 형식:\n"
-    "- 지표명과 번호를 명시\n"
-    "- 평가기준을 항목별로 구체적으로 설명\n"
-    "- 실제 확인 방법(서류, 면담 등) 포함\n"
-    "- 자료에 없는 내용은 솔직하게 모른다고 말씀해주세요."
+    "제공된 2026년 장기요양 평가 자료를 바탕으로 정확하고 친절하게 한국어로 답변해주세요. "
+    "평가기준, 판단 방법, 주의사항, 실무 예시 등을 포함하여 실무에 도움이 되도록 상세하게 답변하세요. "
+    "답변은 항목별로 구조화하여 읽기 쉽게 작성하고, 자료에 없는 내용은 '자료에서 확인되지 않습니다'라고 하세요."
 )
 
 
@@ -177,7 +174,7 @@ def ask_claude(question: str) -> str:
     system = f"{SYSTEM_BASE}\n\n[평가 자료]\n{context}"
     response = ai.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=800,
+        max_tokens=1500,
         system=system,
         messages=[{"role": "user", "content": question}],
     )
