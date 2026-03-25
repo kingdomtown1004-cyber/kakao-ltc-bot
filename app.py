@@ -18,45 +18,96 @@ app = Flask(__name__)
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# 미리 추출한 PDF 텍스트 로드 (약 25K 토큰)
-def load_pdf_text():
-    path = os.path.join(os.path.dirname(__file__), "pdf_content_clean.json")
+BASE_DIR = os.path.dirname(__file__)
+
+
+def load_json(fname):
     try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        # 큰 파일(21K토큰) 제외, 작은 2개만 사용 → 총 ~11.5K 토큰 (5초 이내)
-        use_files = [
-            "2026_home_benefit_indicators_freq_2.pdf",
-            "evaluation_questionnaire.pdf",
-        ]
-        combined = ""
-        for fname in use_files:
-            if fname in data:
-                label = fname.replace(".pdf", "").replace("_", " ")
-                combined += f"\n\n=== {label} ===\n{data[fname]}"
-        logger.info(f"PDF 텍스트 로드 완료: {len(combined)}자")
-        return combined
+        with open(os.path.join(BASE_DIR, fname), "r", encoding="utf-8") as f:
+            return json.load(f)
     except Exception as e:
-        logger.error(f"PDF 텍스트 로드 실패: {e}")
-        return ""
+        logger.error(f"{fname} 로드 실패: {e}")
+        return None
 
-PDF_TEXT = load_pdf_text()
 
-SYSTEM_PROMPT = (
+# 지표 DB (30개 지표 구조화 정보)
+INDICATOR_DB = load_json("indicator_db.json") or []
+
+# 종사자 면담 예시 (4.8K 토큰 - 작은 파일)
+PDF_CONTENT = load_json("pdf_content_clean.json") or {}
+QUESTIONNAIRE_TEXT = PDF_CONTENT.get("evaluation_questionnaire.pdf", "")
+
+logger.info(f"지표 DB: {len(INDICATOR_DB)}개 / 면담예시: {len(QUESTIONNAIRE_TEXT)}자")
+
+
+def find_indicator(question: str):
+    """질문에서 지표 번호 또는 이름으로 관련 지표 찾기"""
+    # 번호 패턴: "1번", "지표1", "지표 1" 등
+    num_match = re.search(r'지표\s*(\d+)번?|(\d+)\s*번\s*지표|지표\s*번호\s*(\d+)', question)
+    if not num_match:
+        num_match = re.search(r'\b(\d{1,2})\s*번\b', question)
+
+    if num_match:
+        no = int(next(g for g in num_match.groups() if g))
+        for ind in INDICATOR_DB:
+            if ind["no"] == no:
+                return ind
+
+    # 이름 매칭
+    for ind in INDICATOR_DB:
+        if ind["name"] in question:
+            return ind
+
+    return None
+
+
+def build_context(question: str) -> str:
+    """질문에 맞는 최소 컨텍스트 생성"""
+    ind = find_indicator(question)
+
+    if ind:
+        # 지표 정보 (200자 미만)
+        ind_text = (
+            f"[지표 {ind['no']}번: {ind['name']}]\n"
+            f"평가기준: {', '.join(ind['criteria'])}\n"
+            f"적용 급여: {ind['note']}\n"
+        )
+    else:
+        ind_text = ""
+
+    # 관련 면담 예시 섹션 추출 (최대 3000자)
+    if ind and QUESTIONNAIRE_TEXT:
+        # 지표 이름으로 관련 섹션 찾기
+        keyword = ind["name"]
+        idx = QUESTIONNAIRE_TEXT.find(keyword)
+        if idx >= 0:
+            start = max(0, idx - 100)
+            end = min(len(QUESTIONNAIRE_TEXT), idx + 3000)
+            qa_text = QUESTIONNAIRE_TEXT[start:end]
+        else:
+            qa_text = QUESTIONNAIRE_TEXT[:3000]
+    else:
+        qa_text = QUESTIONNAIRE_TEXT[:3000]
+
+    return f"{ind_text}\n[종사자 면담 예시]\n{qa_text}"
+
+
+SYSTEM_BASE = (
     "당신은 노인장기요양보험 평가 전문가입니다. "
-    "아래에 제공된 2026년 장기요양 평가 매뉴얼 Q&A 자료를 바탕으로 "
+    "제공된 2026년 장기요양 평가 자료를 바탕으로 "
     "정확하고 친절하게 한국어로 답변해주세요. "
     "자료에 명시된 내용은 구체적으로 인용하고, "
-    "자료에 없는 내용은 솔직하게 모른다고 말씀해주세요.\n\n"
-    f"[평가 매뉴얼 자료]\n{PDF_TEXT}"
+    "자료에 없는 내용은 솔직하게 모른다고 말씀해주세요."
 )
 
 
-def ask_claude(question):
+def ask_claude(question: str) -> str:
+    context = build_context(question)
+    system = f"{SYSTEM_BASE}\n\n[평가 자료]\n{context}"
     response = ai.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1024,
-        system=SYSTEM_PROMPT,
+        system=system,
         messages=[{"role": "user", "content": question}],
     )
     return response.content[0].text
@@ -68,9 +119,7 @@ def send_callback(callback_url, answer):
         answer = answer[:3990] + "\n\n...(이하 생략)"
     payload = {
         "version": "2.0",
-        "template": {
-            "outputs": [{"simpleText": {"text": answer}}]
-        }
+        "template": {"outputs": [{"simpleText": {"text": answer}}]}
     }
     try:
         with httpx.Client(timeout=30.0) as http:
@@ -94,7 +143,6 @@ def skill():
     data = request.get_json()
     question = data.get("userRequest", {}).get("utterance", "")
     callback_url = data.get("userRequest", {}).get("callbackUrl", "")
-
     logger.info(f"질문: {question[:50]}")
 
     if not question:
@@ -104,12 +152,11 @@ def skill():
         })
 
     if callback_url:
-        thread = threading.Thread(
+        threading.Thread(
             target=process_in_background,
             args=(question, callback_url),
             daemon=True
-        )
-        thread.start()
+        ).start()
         return jsonify({
             "version": "2.0",
             "useCallback": True,
@@ -134,53 +181,11 @@ def skill():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "pdf_chars": len(PDF_TEXT)})
-
-
-@app.route("/preprocess", methods=["GET"])
-def preprocess():
-    """PDF에서 전체 지표 정보를 한 번 추출 (결과를 로컬 저장용)"""
-    import httpx as hx
-    SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
-
-    try:
-        # Files API로 핵심 2개 PDF만 사용 (rate limit 고려)
-        headers = {"Authorization": f"Bearer {SUPABASE_KEY}", "apikey": SUPABASE_KEY}
-        fnames = [
-            "2026_home_care_indicators_freq_1.pdf",
-            "2026_home_benefit_indicators_freq_2.pdf",
-        ]
-        file_ids_pre = {}
-        with hx.Client(timeout=120) as http:
-            for fname in fnames:
-                url = f"{SUPABASE_URL}/storage/v1/object/evaluation-pdf/{fname}"
-                r = http.get(url, headers=headers)
-                r.raise_for_status()
-                up = ai.beta.files.upload(file=(fname, r.content, "application/pdf"))
-                file_ids_pre[fname] = up.id
-
-        content = []
-        for fname, fid in file_ids_pre.items():
-            content.append({"type": "document", "source": {"type": "file", "file_id": fid},
-                             "title": fname})
-        content.append({"type": "text", "text": (
-            "위 문서에서 방문요양 평가지표를 번호 순서대로 모두 추출해주세요. "
-            "각 지표마다 JSON 배열 형태로: "
-            '[{"no": 1, "name": "지표명", "criteria": ["기준①내용", "기준②내용"], "note": "비고"}] '
-            "형식으로 출력해주세요. 코드블록 없이 순수 JSON만 출력하세요."
-        )})
-
-        resp = ai.beta.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=4000,
-            messages=[{"role": "user", "content": content}],
-            betas=["files-api-2025-04-14"],
-        )
-        result_text = resp.content[0].text
-        return jsonify({"status": "ok", "data": result_text})
-    except Exception as e:
-        return jsonify({"status": "error", "message": str(e)})
+    return jsonify({
+        "status": "ok",
+        "indicators": len(INDICATOR_DB),
+        "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
+    })
 
 
 if __name__ == "__main__":
