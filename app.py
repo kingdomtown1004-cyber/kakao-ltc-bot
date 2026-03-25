@@ -85,26 +85,35 @@ def upload_pdfs():
 
 def ask_claude(question):
     content = []
-    for pdf_name, file_id in file_ids.items():
-        content.append({
+    pdf_items = list(file_ids.items())
+    for i, (pdf_name, file_id) in enumerate(pdf_items):
+        doc = {
             "type": "document",
             "source": {"type": "file", "file_id": file_id},
             "title": pdf_name.replace(".pdf", "").replace("_", " "),
-        })
+        }
+        # 마지막 문서에 캐시 포인트 설정 → PDF 전체를 캐시
+        if i == len(pdf_items) - 1:
+            doc["cache_control"] = {"type": "ephemeral"}
+        content.append(doc)
     content.append({"type": "text", "text": question})
 
     response = ai.beta.messages.create(
         model="claude-haiku-4-5",
         max_tokens=1024,
-        system=(
-            "당신은 노인장기요양보험 평가 전문가입니다. "
-            "제공된 2026년 장기요양 평가 매뉴얼 문서를 바탕으로 "
-            "정확하고 친절하게 한국어로 답변해주세요. "
-            "문서에 없는 내용은 솔직하게 모른다고 말씀해주세요. "
-            "답변 시 관련 지표명이나 매뉴얼 항목을 구체적으로 언급해주세요."
-        ),
+        system=[{
+            "type": "text",
+            "text": (
+                "당신은 노인장기요양보험 평가 전문가입니다. "
+                "제공된 2026년 장기요양 평가 매뉴얼 문서를 바탕으로 "
+                "정확하고 친절하게 한국어로 답변해주세요. "
+                "문서에 없는 내용은 솔직하게 모른다고 말씀해주세요. "
+                "답변 시 관련 지표명이나 매뉴얼 항목을 구체적으로 언급해주세요."
+            ),
+            "cache_control": {"type": "ephemeral"},
+        }],
         messages=[{"role": "user", "content": content}],
-        betas=["files-api-2025-04-14"],
+        betas=["files-api-2025-04-14", "prompt-caching-2024-07-31"],
     )
     return response.content[0].text
 
