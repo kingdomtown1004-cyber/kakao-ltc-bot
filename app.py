@@ -208,7 +208,30 @@ def skill():
 
 @app.route("/health", methods=["GET"])
 def health():
-    return jsonify({"status": "ok", "files_loaded": len(file_ids)})
+    return jsonify({"status": "ok", "files_loaded": len(file_ids), "file_names": list(file_ids.keys())})
+
+
+@app.route("/debug", methods=["GET"])
+def debug():
+    result = {}
+    # 1. Anthropic Files API 테스트
+    try:
+        page = ai.beta.files.list()
+        result["anthropic_files"] = [f.filename for f in page.data]
+    except Exception as e:
+        result["anthropic_error"] = str(e)
+
+    # 2. Supabase 다운로드 테스트 (첫 번째 파일만)
+    test_pdf = PDF_FILES[0]
+    try:
+        data = download_from_supabase(test_pdf)
+        result["supabase_ok"] = True
+        result["supabase_size"] = len(data)
+    except Exception as e:
+        result["supabase_error"] = str(e)
+
+    result["file_ids_count"] = len(file_ids)
+    return jsonify(result)
 
 
 # gunicorn 포함 모든 실행 방식에서 PDF 초기화
