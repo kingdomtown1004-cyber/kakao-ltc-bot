@@ -101,16 +101,54 @@ SYSTEM_BASE = (
 )
 
 
+def format_indicator_answer(ind: dict, question: str) -> str:
+    """지표 DB에서 즉시 포맷된 답변 생성 (Claude 없이)"""
+    lines = [
+        f"📋 지표 {ind['no']}번: {ind['name']}",
+        "",
+        "✅ 평가기준",
+    ]
+    for c in ind["criteria"]:
+        lines.append(f"  {c}")
+    lines.append("")
+    lines.append(f"📌 적용 급여: {ind['note']}")
+
+    # 면담 예시 추가
+    if QUESTIONNAIRE_TEXT:
+        keyword = ind["name"]
+        idx = QUESTIONNAIRE_TEXT.find(keyword)
+        if idx >= 0:
+            start = max(0, idx - 50)
+            end = min(len(QUESTIONNAIRE_TEXT), idx + 1500)
+            qa_section = QUESTIONNAIRE_TEXT[start:end].strip()
+            if qa_section:
+                lines.append("")
+                lines.append("💬 면담 예시")
+                lines.append(qa_section[:1200])
+
+    return "\n".join(lines)
+
+
 def ask_claude(question: str) -> str:
     context = build_context(question)
     system = f"{SYSTEM_BASE}\n\n[평가 자료]\n{context}"
     response = ai.messages.create(
         model="claude-haiku-4-5",
-        max_tokens=1024,
+        max_tokens=600,
         system=system,
         messages=[{"role": "user", "content": question}],
     )
     return response.content[0].text
+
+
+def get_answer(question: str) -> str:
+    """지표 직접 조회 → 즉시 응답, 아니면 Claude 호출"""
+    ind = find_indicator(question)
+    if ind and ind["criteria"]:
+        # 지표 번호/이름이 명확히 매칭되면 DB에서 즉시 응답
+        return format_indicator_answer(ind, question)
+    # 일반 질문은 Claude 호출
+    return ask_claude(question)
 
 
 def send_callback(callback_url, answer):
@@ -131,7 +169,7 @@ def send_callback(callback_url, answer):
 
 def process_in_background(question, callback_url):
     try:
-        answer = ask_claude(question)
+        answer = get_answer(question)
         send_callback(callback_url, answer)
     except Exception as e:
         logger.error(f"처리 오류: {e}")
@@ -164,7 +202,7 @@ def skill():
         })
     else:
         try:
-            answer = ask_claude(question)
+            answer = get_answer(question)
             if len(answer) > 4000:
                 answer = answer[:3990] + "\n\n...(이하 생략)"
             return jsonify({
