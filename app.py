@@ -32,8 +32,15 @@ PDF_FILES = [
     "evaluation_questionnaire.pdf",
 ]
 
-# 전역 파일 ID 캐시
+# 전역 파일 ID 캐시 (모듈 로드 시 초기화 → gunicorn에서도 실행됨)
 file_ids = {}
+
+
+def init_files():
+    global file_ids
+    logger.info("PDF 파일 준비 중...")
+    file_ids = upload_pdfs()
+    logger.info(f"✅ {len(file_ids)}개 PDF 준비 완료!")
 
 
 def get_existing_files():
@@ -204,10 +211,9 @@ def health():
     return jsonify({"status": "ok", "files_loaded": len(file_ids)})
 
 
-if __name__ == "__main__":
-    logger.info("PDF 파일 준비 중...")
-    file_ids = upload_pdfs()
-    logger.info(f"✅ {len(file_ids)}개 PDF 준비 완료!")
+# gunicorn 포함 모든 실행 방식에서 PDF 초기화
+init_files()
 
+if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
