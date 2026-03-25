@@ -231,6 +231,16 @@ def debug():
         result["supabase_error"] = str(e)
 
     result["file_ids_count"] = len(file_ids)
+
+    # 3. Claude 호출 테스트
+    if file_ids:
+        try:
+            answer = ask_claude("방문요양 평가지표 1번은 무엇인가요?")
+            result["claude_ok"] = True
+            result["claude_answer"] = answer[:200]
+        except Exception as e:
+            result["claude_error"] = str(e)
+
     return jsonify(result)
 
 
