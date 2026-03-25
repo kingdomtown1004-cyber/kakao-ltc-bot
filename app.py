@@ -137,6 +137,52 @@ def health():
     return jsonify({"status": "ok", "pdf_chars": len(PDF_TEXT)})
 
 
+@app.route("/preprocess", methods=["GET"])
+def preprocess():
+    """PDF에서 전체 지표 정보를 한 번 추출 (결과를 로컬 저장용)"""
+    import httpx as hx
+    SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip()
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY", "").strip()
+
+    try:
+        # Files API로 핵심 2개 PDF만 사용 (rate limit 고려)
+        headers = {"Authorization": f"Bearer {SUPABASE_KEY}", "apikey": SUPABASE_KEY}
+        fnames = [
+            "2026_home_care_indicators_freq_1.pdf",
+            "2026_home_benefit_indicators_freq_2.pdf",
+        ]
+        file_ids_pre = {}
+        with hx.Client(timeout=120) as http:
+            for fname in fnames:
+                url = f"{SUPABASE_URL}/storage/v1/object/evaluation-pdf/{fname}"
+                r = http.get(url, headers=headers)
+                r.raise_for_status()
+                up = ai.beta.files.upload(file=(fname, r.content, "application/pdf"))
+                file_ids_pre[fname] = up.id
+
+        content = []
+        for fname, fid in file_ids_pre.items():
+            content.append({"type": "document", "source": {"type": "file", "file_id": fid},
+                             "title": fname})
+        content.append({"type": "text", "text": (
+            "위 문서에서 방문요양 평가지표를 번호 순서대로 모두 추출해주세요. "
+            "각 지표마다 JSON 배열 형태로: "
+            '[{"no": 1, "name": "지표명", "criteria": ["기준①내용", "기준②내용"], "note": "비고"}] '
+            "형식으로 출력해주세요. 코드블록 없이 순수 JSON만 출력하세요."
+        )})
+
+        resp = ai.beta.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": content}],
+            betas=["files-api-2025-04-14"],
+        )
+        result_text = resp.content[0].text
+        return jsonify({"status": "ok", "data": result_text})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)})
+
+
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
