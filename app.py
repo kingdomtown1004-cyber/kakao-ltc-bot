@@ -33,11 +33,14 @@ def load_json(fname):
 # 지표 DB (30개 지표 구조화 정보)
 INDICATOR_DB = load_json("indicator_db.json") or []
 
-# 종사자 면담 예시 (4.8K 토큰 - 작은 파일)
+# 전체 PDF 텍스트 (6개 파일, 128K자) - 검색용
 PDF_CONTENT = load_json("pdf_content_clean.json") or {}
+# 전체 텍스트를 하나로 합침 (키워드 검색용)
+ALL_TEXT = "\n\n".join(PDF_CONTENT.values())
 QUESTIONNAIRE_TEXT = PDF_CONTENT.get("evaluation_questionnaire.pdf", "")
 
-logger.info(f"지표 DB: {len(INDICATOR_DB)}개 / 면담예시: {len(QUESTIONNAIRE_TEXT)}자")
+total_chars = sum(len(v) for v in PDF_CONTENT.values())
+logger.info(f"지표 DB: {len(INDICATOR_DB)}개 / PDF 전체: {total_chars}자 ({len(PDF_CONTENT)}개 파일)")
 
 
 def find_indicator(question: str):
@@ -61,12 +64,46 @@ def find_indicator(question: str):
     return None
 
 
+def search_text(keywords: list, max_chars: int = 4000) -> str:
+    """전체 PDF 텍스트에서 키워드 관련 단락 수집"""
+    collected = []
+    seen = set()
+    for keyword in keywords:
+        start = 0
+        while True:
+            idx = ALL_TEXT.find(keyword, start)
+            if idx < 0:
+                break
+            # 앞뒤 문단 포함
+            chunk_start = max(0, idx - 200)
+            chunk_end = min(len(ALL_TEXT), idx + 800)
+            chunk = ALL_TEXT[chunk_start:chunk_end].strip()
+            key = chunk[:80]
+            if key not in seen:
+                seen.add(key)
+                collected.append(chunk)
+            start = idx + 1
+            if sum(len(c) for c in collected) > max_chars:
+                break
+        if sum(len(c) for c in collected) > max_chars:
+            break
+    return "\n\n---\n\n".join(collected)[:max_chars]
+
+
 def build_context(question: str) -> str:
-    """질문에 맞는 최소 컨텍스트 생성"""
+    """질문에 맞는 관련 내용 수집"""
     ind = find_indicator(question)
 
+    # 검색 키워드 구성
+    keywords = []
     if ind:
-        # 지표 정보 (200자 미만)
+        keywords.append(ind["name"])
+        keywords += [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]]
+    # 질문에서 핵심 단어 추가 (2글자 이상 한국어 단어)
+    question_words = re.findall(r'[가-힣]{2,}', question)
+    keywords += [w for w in question_words if len(w) >= 3]
+
+    if ind:
         ind_text = (
             f"[지표 {ind['no']}번: {ind['name']}]\n"
             f"평가기준: {', '.join(ind['criteria'])}\n"
@@ -75,21 +112,15 @@ def build_context(question: str) -> str:
     else:
         ind_text = ""
 
-    # 관련 면담 예시 섹션 추출 (최대 3000자)
-    if ind and QUESTIONNAIRE_TEXT:
-        # 지표 이름으로 관련 섹션 찾기
-        keyword = ind["name"]
-        idx = QUESTIONNAIRE_TEXT.find(keyword)
-        if idx >= 0:
-            start = max(0, idx - 100)
-            end = min(len(QUESTIONNAIRE_TEXT), idx + 3000)
-            qa_text = QUESTIONNAIRE_TEXT[start:end]
-        else:
-            qa_text = QUESTIONNAIRE_TEXT[:3000]
-    else:
-        qa_text = QUESTIONNAIRE_TEXT[:3000]
+    # 전체 텍스트에서 관련 내용 검색 (최대 4000자)
+    relevant = search_text(keywords, max_chars=4000) if keywords else ""
 
-    return f"{ind_text}\n[종사자 면담 예시]\n{qa_text}"
+    parts = []
+    if ind_text:
+        parts.append(ind_text)
+    if relevant:
+        parts.append(f"[관련 매뉴얼 내용]\n{relevant}")
+    return "\n\n".join(parts) if parts else ""
 
 
 SYSTEM_BASE = (
@@ -113,18 +144,12 @@ def format_indicator_answer(ind: dict, question: str) -> str:
     lines.append("")
     lines.append(f"📌 적용 급여: {ind['note']}")
 
-    # 면담 예시 추가
-    if QUESTIONNAIRE_TEXT:
-        keyword = ind["name"]
-        idx = QUESTIONNAIRE_TEXT.find(keyword)
-        if idx >= 0:
-            start = max(0, idx - 50)
-            end = min(len(QUESTIONNAIRE_TEXT), idx + 1500)
-            qa_section = QUESTIONNAIRE_TEXT[start:end].strip()
-            if qa_section:
-                lines.append("")
-                lines.append("💬 면담 예시")
-                lines.append(qa_section[:1200])
+    # 면담 예시 추가 (전체 텍스트에서 검색)
+    qa_section = search_text([ind["name"]] + [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]], max_chars=1500)
+    if qa_section:
+        lines.append("")
+        lines.append("💬 관련 Q&A")
+        lines.append(qa_section[:1200])
 
     return "\n".join(lines)
 
