@@ -24,10 +24,16 @@ def load_pdf_text():
     try:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        # 큰 파일(21K토큰) 제외, 작은 2개만 사용 → 총 ~11.5K 토큰 (5초 이내)
+        use_files = [
+            "2026_home_benefit_indicators_freq_2.pdf",
+            "evaluation_questionnaire.pdf",
+        ]
         combined = ""
-        for fname, text in data.items():
-            label = fname.replace(".pdf", "").replace("_", " ")
-            combined += f"\n\n=== {label} ===\n{text}"
+        for fname in use_files:
+            if fname in data:
+                label = fname.replace(".pdf", "").replace("_", " ")
+                combined += f"\n\n=== {label} ===\n{data[fname]}"
         logger.info(f"PDF 텍스트 로드 완료: {len(combined)}자")
         return combined
     except Exception as e:
