@@ -229,14 +229,47 @@ SYSTEM_FAST = (
 )
 
 
+def format_db_answer(ind: dict) -> str:
+    """Claude 없이 DB에서 즉시 포맷된 답변 생성 (빠름)"""
+    lines = [f"📋 지표 {ind['no']}번: {ind['name']}", "", "✅ 평가기준"]
+    for c in ind["criteria"]:
+        lines.append(f"  {c}")
+    if ind.get("detail"):
+        lines.append("")
+        lines.append(ind["detail"])
+    lines.append("")
+    lines.append(f"📌 적용 급여: {ind['note']}")
+    # 관련 PDF 내용 추가
+    keywords = [ind["name"]] + [re.sub(r'^[①②③④⑤⑥⑦⑧⑨]', '', c).split('(')[0].strip() for c in ind["criteria"]]
+    relevant = search_text(keywords, max_chars=1000)
+    if relevant:
+        lines.append("")
+        lines.append("🔍 매뉴얼 참조")
+        lines.append(relevant[:800])
+    return "\n".join(lines)
+
+
+def is_simple_lookup(question: str) -> bool:
+    """단순 지표 조회 질문 여부 (Claude 불필요)"""
+    simple_patterns = [r'지표\s*\d+', r'\d+\s*번\s*지표', r'지표\s*번호\s*\d+']
+    has_number = any(re.search(p, question) for p in simple_patterns)
+    detail_words = ['조심', '주의', '어떻게', '방법', '이유', '왜', '설명', '자세히', '예시', '차이', '비교', '확인']
+    has_detail = any(w in question for w in detail_words)
+    return has_number and not has_detail
+
+
 def ask_claude(question: str, detailed: bool = False) -> str:
     if detailed:
         context = build_context(question)
         system = f"{SYSTEM_DETAIL}\n\n[평가 자료]\n{context}"
         max_tok = 1500
+        timeout = 60.0
     else:
-        # 빠른 경로: 컨텍스트 절반, 토큰 적게
         ind = find_indicator(question)
+        # 단순 지표 조회는 Claude 없이 즉시 답변 (< 0.1초)
+        if ind and is_simple_lookup(question):
+            return format_db_answer(ind)
+        # 상세 질문은 Claude 사용 (타임아웃 3.5초)
         keywords = []
         if ind:
             keywords.append(ind["name"])
@@ -263,14 +296,24 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         context = "\n\n".join(parts)
         system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
         max_tok = 350
+        timeout = 3.5
 
-    response = ai.messages.create(
-        model="claude-haiku-4-5",
-        max_tokens=max_tok,
-        system=system,
-        messages=[{"role": "user", "content": question}],
-    )
-    return response.content[0].text
+    try:
+        response = ai.messages.create(
+            model="claude-haiku-4-5",
+            max_tokens=max_tok,
+            system=system,
+            messages=[{"role": "user", "content": question}],
+            timeout=timeout,
+        )
+        return response.content[0].text
+    except Exception as e:
+        logger.error(f"Claude 오류: {e}")
+        # 타임아웃 또는 오류 시 DB 답변으로 대체
+        ind = find_indicator(question)
+        if ind:
+            return format_db_answer(ind)
+        return "⚠️ 잠시 응답이 지연되고 있습니다. 다시 질문해 주세요."
 
 
 def get_answer(question: str, detailed: bool = False) -> str:
