@@ -77,21 +77,48 @@ def clean_chunk(text: str) -> str:
     return '\n'.join(cleaned).strip()
 
 
-def search_text(keywords: list, max_chars: int = 4000) -> str:
+# 급여 유형별 관련 파일 매핑
+FILE_GROUPS = {
+    "방문요양": ["2026_home_care_evaluation_manual_1.pdf", "split/home_care_5.pdf", "split/home_care_6.pdf", "split/home_care_7.pdf", "attach_1_2026_home_care_manual_qa_case_v2.pdf"],
+    "방문목욕": ["2026_home_bath_evaluation_manual_2.pdf"],
+    "주야간보호": ["split/day_care_1.pdf","split/day_care_2.pdf","split/day_care_3.pdf","split/day_care_4.pdf","split/day_care_5.pdf","split/day_care_6.pdf","split/day_care_7.pdf","split/day_care_8.pdf","split/day_care_9.pdf","split/day_care_10.pdf"],
+    "재가": ["2026_home_care_indicators_freq_1.pdf", "2026_home_care_benefit_manual_freq_2.pdf"],
+}
+
+def detect_care_type(question: str) -> list:
+    """질문에서 급여 유형 감지 → 관련 파일 우선 검색"""
+    if any(k in question for k in ["방문목욕", "목욕"]):
+        return FILE_GROUPS["방문목욕"]
+    if any(k in question for k in ["주야간", "주간보호", "야간보호", "데이케어"]):
+        return FILE_GROUPS["주야간보호"]
+    if any(k in question for k in ["방문요양", "요양보호사", "방문"]):
+        return FILE_GROUPS["방문요양"]
+    return []  # 전체 검색
+
+
+def search_text(keywords: list, max_chars: int = 4000, priority_files: list = None) -> str:
     """전체 PDF 텍스트에서 키워드 관련 단락 수집 (목차 제외)"""
+    # 우선 검색 텍스트 구성: priority_files 먼저, 나머지 뒤에
+    if priority_files:
+        priority_text = "\n\n".join(PDF_CONTENT.get(f, "") for f in priority_files if f in PDF_CONTENT)
+        other_text = "\n\n".join(v for k, v in PDF_CONTENT.items() if k not in priority_files)
+        search_source = priority_text + "\n\n" + other_text
+    else:
+        search_source = ALL_TEXT
+
     collected = []
     seen = set()
     for keyword in keywords:
         start = 0
         while True:
-            idx = ALL_TEXT.find(keyword, start)
+            idx = search_source.find(keyword, start)
             if idx < 0:
                 break
-            chunk_start = max(0, idx - 200)
-            chunk_end = min(len(ALL_TEXT), idx + 800)
-            raw = ALL_TEXT[chunk_start:chunk_end]
+            chunk_start = max(0, idx - 300)
+            chunk_end = min(len(search_source), idx + 1500)  # 더 넓은 창
+            raw = search_source[chunk_start:chunk_end]
             chunk = clean_chunk(raw)
-            if len(chunk) < 50:  # 정리 후 너무 짧으면 스킵
+            if len(chunk) < 50:
                 start = idx + 1
                 continue
             key = chunk[:80]
@@ -109,15 +136,25 @@ def search_text(keywords: list, max_chars: int = 4000) -> str:
 def build_context(question: str) -> str:
     """질문에 맞는 관련 내용 수집"""
     ind = find_indicator(question)
+    priority_files = detect_care_type(question)
 
     # 검색 키워드 구성
     keywords = []
     if ind:
         keywords.append(ind["name"])
-        keywords += [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]]
-    # 질문에서 핵심 단어 추가 (2글자 이상 한국어 단어)
+        # criteria에서 핵심어 추출
+        for c in ind["criteria"]:
+            stripped = re.sub(r'^[①②③④⑤⑥⑦⑧⑨]', '', c).strip()
+            # 괄호 안 설명 제거
+            stripped = re.sub(r'\s*\(.*?\)', '', stripped).strip()
+            if len(stripped) >= 2:
+                keywords.append(stripped)
+    # 질문에서 핵심 단어 추가
     question_words = re.findall(r'[가-힣]{2,}', question)
     keywords += [w for w in question_words if len(w) >= 3]
+    # 중복 제거
+    seen_kw = set()
+    keywords = [k for k in keywords if not (k in seen_kw or seen_kw.add(k))]
 
     if ind:
         ind_parts = [
@@ -131,8 +168,8 @@ def build_context(question: str) -> str:
     else:
         ind_text = ""
 
-    # 전체 텍스트에서 관련 내용 검색 (최대 4000자)
-    relevant = search_text(keywords, max_chars=4000) if keywords else ""
+    # 전체 텍스트에서 관련 내용 검색 (최대 8000자, 우선 파일 먼저)
+    relevant = search_text(keywords, max_chars=8000, priority_files=priority_files) if keywords else ""
 
     parts = []
     if ind_text:
@@ -180,7 +217,8 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             ind_text = "\n".join(_parts)
         else:
             ind_text = ""
-        relevant = search_text(keywords, max_chars=2000) if keywords else ""
+        priority_files = detect_care_type(question)
+        relevant = search_text(keywords, max_chars=3000, priority_files=priority_files) if keywords else ""
         parts = []
         if ind_text:
             parts.append(ind_text)
