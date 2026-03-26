@@ -289,7 +289,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         context = "\n\n".join(parts)
         system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
         max_tok = 350
-        timeout = 3.5
+        timeout = 2.5
 
     result_holder = []
 
