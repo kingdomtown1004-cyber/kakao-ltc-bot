@@ -33,6 +33,10 @@ def load_json(fname):
 # 지표 DB (30개 지표 구조화 정보)
 INDICATOR_DB = load_json("indicator_db.json") or []
 
+# 미리 생성된 지표별 상세 답변 캐시
+INDICATOR_ANSWERS = load_json("indicator_answers.json") or {}
+logger.info(f"사전 생성 답변: {len(INDICATOR_ANSWERS)}개 로드")
+
 # 전체 PDF 텍스트 (6개 파일, 128K자) - 검색용
 PDF_CONTENT = load_json("pdf_content_clean.json") or {}
 # 전체 텍스트를 하나로 합침 (키워드 검색용)
@@ -252,17 +256,22 @@ def is_simple_lookup(question: str) -> bool:
 
 
 def ask_claude(question: str, detailed: bool = False) -> str:
+    ind = find_indicator(question)
+
+    # 미리 생성된 캐시 답변 사용 (지표 관련 모든 질문 → 즉시 상세 답변)
+    if ind and str(ind["no"]) in INDICATOR_ANSWERS:
+        return INDICATOR_ANSWERS[str(ind["no"])]
+
     if detailed:
         context = build_context(question)
         system = f"{SYSTEM_DETAIL}\n\n[평가 자료]\n{context}"
         max_tok = 1500
         timeout = 60.0
     else:
-        ind = find_indicator(question)
-        # 단순 지표 조회는 Claude 없이 즉시 답변 (< 0.1초)
+        # 단순 지표 조회는 DB 즉시 답변
         if ind and is_simple_lookup(question):
             return format_db_answer(ind)
-        # 상세 질문은 Claude 사용 (타임아웃 3.5초)
+        # 일반 질문은 Claude 사용 (타임아웃 2.5초)
         keywords = []
         if ind:
             keywords.append(ind["name"])
