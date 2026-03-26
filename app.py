@@ -42,16 +42,51 @@ QUESTIONNAIRE_TEXT = PDF_CONTENT.get("evaluation_questionnaire.pdf", "")
 total_chars = sum(len(v) for v in PDF_CONTENT.values())
 logger.info(f"지표 DB: {len(INDICATOR_DB)}개 / PDF 전체: {total_chars}자 ({len(PDF_CONTENT)}개 파일)")
 
+# 급여 유형별 지표번호 → 일반 지표 매핑 테이블 (note 필드에서 자동 생성)
+CARE_TYPE_MAP = {
+    "요": {},  # 방문요양
+    "목": {},  # 방문목욕
+    "주": {},  # 주야간보호
+    "간": {},  # 간호
+    "단": {},  # 단기보호
+    "복": {},  # 복지용구
+}
+for _ind in INDICATOR_DB:
+    for _prefix in CARE_TYPE_MAP:
+        for _m in re.finditer(rf'{_prefix}\s*\((\d+(?:,\s*\d+)*)\)', _ind.get("note", "")):
+            for _n in _m.group(1).split(","):
+                CARE_TYPE_MAP[_prefix][int(_n.strip())] = _ind
+
+# 질문에서 급여 유형 접두어 감지
+def detect_care_prefix(question: str) -> str:
+    if any(k in question for k in ["주야간", "주간보호", "야간보호"]):
+        return "주"
+    if any(k in question for k in ["방문목욕", "목욕"]):
+        return "목"
+    if any(k in question for k in ["방문요양", "재가요양"]):
+        return "요"
+    if any(k in question for k in ["방문간호", "간호"]):
+        return "간"
+    if any(k in question for k in ["단기보호", "단기"]):
+        return "단"
+    if any(k in question for k in ["복지용구"]):
+        return "복"
+    return ""
+
 
 def find_indicator(question: str):
-    """질문에서 지표 번호 또는 이름으로 관련 지표 찾기"""
-    # 번호 패턴: "1번", "지표1", "지표 1" 등
+    """질문에서 지표 번호 또는 이름으로 관련 지표 찾기 (급여유형별 번호 지원)"""
     num_match = re.search(r'지표\s*(\d+)번?|(\d+)\s*번\s*지표|지표\s*번호\s*(\d+)', question)
     if not num_match:
         num_match = re.search(r'\b(\d{1,2})\s*번\b', question)
 
     if num_match:
         no = int(next(g for g in num_match.groups() if g))
+        # 급여 유형이 명시된 경우 유형별 매핑 우선 적용
+        prefix = detect_care_prefix(question)
+        if prefix and no in CARE_TYPE_MAP.get(prefix, {}):
+            return CARE_TYPE_MAP[prefix][no]
+        # 일반 지표 번호 매칭
         for ind in INDICATOR_DB:
             if ind["no"] == no:
                 return ind
@@ -180,16 +215,17 @@ def build_context(question: str) -> str:
 
 
 SYSTEM_DETAIL = (
-    "당신은 노인장기요양보험 평가 전문가입니다. "
-    "제공된 2026년 장기요양 평가 자료를 바탕으로 정확하고 친절하게 한국어로 답변해주세요. "
-    "평가기준, 판단 방법, 주의사항, 실무 예시 등을 포함하여 실무에 도움이 되도록 상세하게 답변하세요. "
-    "답변은 항목별로 구조화하여 읽기 쉽게 작성하고, 자료에 없는 내용은 '자료에서 확인되지 않습니다'라고 하세요."
+    "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
+    "반드시 제공된 [평가 자료]에 있는 내용만 사용하여 답변하세요. 자료에 없는 내용은 절대 추측하거나 만들어 내지 마세요. "
+    "답변 형식: 📋 지표명과 번호로 시작 → ✅ 평가기준(각 항목별 번호/내용) → 🔍 확인방법 → ⚠️ 주의사항 순서로 구조화하세요. "
+    "각 항목은 줄바꿈으로 구분하고, 실무에 바로 활용할 수 있도록 구체적으로 작성하세요. "
+    "자료에서 확인되지 않는 내용은 '📌 자료에서 확인되지 않습니다'라고 명시하세요."
 )
 
 SYSTEM_FAST = (
-    "당신은 노인장기요양보험 평가 전문가입니다. "
-    "제공된 2026년 장기요양 평가 자료를 바탕으로 한국어로 답변해주세요. "
-    "핵심 내용 위주로 간결하게(400자 이내) 답변하고, 자료에 없는 내용은 '자료에서 확인되지 않습니다'라고 하세요."
+    "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
+    "반드시 제공된 [평가 자료]에 있는 내용만 사용하세요. 자료에 없는 내용은 추측하지 마세요. "
+    "핵심 평가기준과 확인방법 위주로 간결하게 답변하고, 자료에 없으면 '자료에서 확인되지 않습니다'라고 하세요."
 )
 
 
