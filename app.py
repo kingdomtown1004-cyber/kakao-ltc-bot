@@ -255,8 +255,33 @@ def is_simple_lookup(question: str) -> bool:
     return has_number and not has_detail
 
 
+KEYWORD_MAP = {
+    "신설지표": ["신설지표", "변경지표"],
+    "변경지표": ["신설지표", "변경지표"],
+    "신설": ["신설지표"],
+    "새로운지표": ["신설지표"],
+    "바뀐지표": ["변경지표"],
+}
+
+
+def find_keyword_answer(question: str) -> str | None:
+    """키워드 기반 캐시 답변 검색"""
+    q = question.replace(" ", "")
+    for keyword, cache_keys in KEYWORD_MAP.items():
+        if keyword in q:
+            for key in cache_keys:
+                if key in INDICATOR_ANSWERS:
+                    return INDICATOR_ANSWERS[key]
+    return None
+
+
 def ask_claude(question: str, detailed: bool = False) -> str:
     ind = find_indicator(question)
+
+    # 키워드 기반 캐시 답변 (신설지표 등)
+    keyword_ans = find_keyword_answer(question)
+    if keyword_ans:
+        return keyword_ans
 
     # 미리 생성된 캐시 답변 사용 (지표 관련 모든 질문 → 즉시 상세 답변)
     if ind and str(ind["no"]) in INDICATOR_ANSWERS:
