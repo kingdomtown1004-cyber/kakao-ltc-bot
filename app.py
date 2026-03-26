@@ -254,7 +254,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         else:
             ind_text = ""
         priority_files = detect_care_type(question)
-        relevant = search_text(keywords, max_chars=3000, priority_files=priority_files) if keywords else ""
+        relevant = search_text(keywords, max_chars=1500, priority_files=priority_files) if keywords else ""
         parts = []
         if ind_text:
             parts.append(ind_text)
@@ -262,7 +262,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             parts.append(f"[관련 자료]\n{relevant}")
         context = "\n\n".join(parts)
         system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
-        max_tok = 500
+        max_tok = 350
 
     response = ai.messages.create(
         model="claude-haiku-4-5",
