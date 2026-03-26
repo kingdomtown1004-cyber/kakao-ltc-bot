@@ -230,7 +230,7 @@ SYSTEM_FAST = (
 
 
 def format_db_answer(ind: dict) -> str:
-    """Claude 없이 DB에서 즉시 포맷된 답변 생성 (빠름)"""
+    """Claude 없이 DB에서 즉시 포맷된 답변 생성 (빠름, search 없음)"""
     lines = [f"📋 지표 {ind['no']}번: {ind['name']}", "", "✅ 평가기준"]
     for c in ind["criteria"]:
         lines.append(f"  {c}")
@@ -239,13 +239,6 @@ def format_db_answer(ind: dict) -> str:
         lines.append(ind["detail"])
     lines.append("")
     lines.append(f"📌 적용 급여: {ind['note']}")
-    # 관련 PDF 내용 추가
-    keywords = [ind["name"]] + [re.sub(r'^[①②③④⑤⑥⑦⑧⑨]', '', c).split('(')[0].strip() for c in ind["criteria"]]
-    relevant = search_text(keywords, max_chars=1000)
-    if relevant:
-        lines.append("")
-        lines.append("🔍 매뉴얼 참조")
-        lines.append(relevant[:800])
     return "\n".join(lines)
 
 
