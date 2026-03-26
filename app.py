@@ -298,22 +298,33 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         max_tok = 350
         timeout = 3.5
 
-    try:
-        response = ai.messages.create(
-            model="claude-haiku-4-5",
-            max_tokens=max_tok,
-            system=system,
-            messages=[{"role": "user", "content": question}],
-            timeout=timeout,
-        )
-        return response.content[0].text
-    except Exception as e:
-        logger.error(f"Claude 오류: {e}")
-        # 타임아웃 또는 오류 시 DB 답변으로 대체
-        ind = find_indicator(question)
-        if ind:
-            return format_db_answer(ind)
-        return "⚠️ 잠시 응답이 지연되고 있습니다. 다시 질문해 주세요."
+    result_holder = []
+
+    def _call():
+        try:
+            resp = ai.messages.create(
+                model="claude-haiku-4-5",
+                max_tokens=max_tok,
+                system=system,
+                messages=[{"role": "user", "content": question}],
+            )
+            result_holder.append(resp.content[0].text)
+        except Exception as e:
+            logger.error(f"Claude 오류: {e}")
+
+    t = threading.Thread(target=_call, daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+
+    if result_holder:
+        return result_holder[0]
+
+    # 타임아웃 → DB 답변으로 대체
+    logger.warning(f"Claude 타임아웃({timeout}s), DB 대체 답변 사용")
+    ind2 = find_indicator(question)
+    if ind2:
+        return format_db_answer(ind2)
+    return "⚠️ 잠시 응답이 지연되고 있습니다. 다시 질문해 주세요."
 
 
 def get_answer(question: str, detailed: bool = False) -> str:
