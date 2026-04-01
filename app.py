@@ -105,10 +105,24 @@ def find_indicator(question: str):
             if ind["no"] == no:
                 return ind
 
-    # 이름 매칭
+    # 이름 전체 매칭
     for ind in INDICATOR_DB:
         if ind["name"] in question:
             return ind
+
+    # 키워드 부분 매칭 (조사 포함 처리: 이름 단어가 질문에 substring으로 포함)
+    best, best_score = None, 0
+    for ind in INDICATOR_DB:
+        name_words = [w for w in re.findall(r'[가-힣]{2,}', ind["name"]) if len(w) >= 3]
+        if not name_words:
+            continue
+        matched = sum(1 for w in name_words if w in question)
+        score = matched / len(name_words)
+        if matched >= 1 and score > best_score:
+            best_score = score
+            best = ind
+    if best and best_score >= 0.4:
+        return best
 
     return None
 
