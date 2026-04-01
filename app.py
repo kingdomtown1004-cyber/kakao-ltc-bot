@@ -409,6 +409,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
                 context = extra
 
         system = (
+            KAKAO_FORMAT +
             "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
             "반드시 아래 [평가 자료]에 있는 내용을 근거로 답변하세요. "
             "사용자의 구체적인 질문에 직접 답변하되, "
@@ -479,8 +480,46 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     return "⚠️ 잠시 응답이 지연되고 있습니다. 다시 질문해 주세요."
 
 
+def clean_markdown(text: str) -> str:
+    """Kakao plain text용 마크다운 제거"""
+    lines = text.splitlines()
+    result = []
+    in_table = False
+    in_code = False
+    for line in lines:
+        # 코드블록 제거
+        if line.strip().startswith("```"):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue
+        # 테이블 행 제거 (|로 시작하거나 |---|--- 구분선)
+        stripped = line.strip()
+        if stripped.startswith("|") or re.match(r'^[\|:\-\s]+$', stripped):
+            in_table = True
+            continue
+        else:
+            in_table = False
+        # # 헤더 → 일반 텍스트
+        line = re.sub(r'^#{1,4}\s+', '', line)
+        # **bold** → 그대로 (가독성 유지)
+        line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
+        # *italic* 제거
+        line = re.sub(r'\*(.+?)\*', r'\1', line)
+        # > 인용 제거
+        line = re.sub(r'^>\s*', '', line)
+        # --- 구분선 제거
+        if re.match(r'^-{3,}$', stripped):
+            continue
+        result.append(line)
+    # 연속 빈줄 정리
+    cleaned = re.sub(r'\n{3,}', '\n\n', '\n'.join(result))
+    return cleaned.strip()
+
+
 def get_answer(question: str, detailed: bool = False) -> str:
-    return ask_claude(question, detailed=detailed)
+    answer = ask_claude(question, detailed=detailed)
+    return clean_markdown(answer)
 
 
 def send_callback(callback_url, answer):
