@@ -411,19 +411,14 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
 
         if supabase_ctx:
-            # Supabase 결과 + 캐시 보조
             context = supabase_ctx
             if cached:
                 context += f"\n\n[지표 종합 참고]\n{cached[:2000]}"
+        elif cached:
+            # Supabase 실패 → 캐시만 사용 (로컬 PDF 검색 생략으로 시간 단축)
+            context = cached
         else:
-            # fallback: 로컬 PDF 검색
-            extra = build_context(question)
-            if cached and extra:
-                context = f"{extra}\n\n[해당 지표 종합 참고]\n{cached[:3000]}"
-            elif cached:
-                context = cached
-            else:
-                context = extra
+            context = build_context(question)
 
         system = (
             KAKAO_FORMAT +
@@ -436,7 +431,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             f"[평가 자료]\n{context}"
         )
         max_tok = 1500
-        timeout = 55.0
+        timeout = 20.0   # 8s(Supabase) + 20s(Claude) = 28s → 30초 이내 완료
         model = "claude-sonnet-4-6"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
