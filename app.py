@@ -4,6 +4,8 @@ import logging
 import threading
 import re
 import anthropic
+import openai
+from supabase import create_client
 
 from flask import Flask, request, jsonify
 
@@ -17,6 +19,14 @@ app = Flask(__name__)
 
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
 ai = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+
+# Supabase + OpenAI (자유 질문 검색용)
+SUPABASE_URL  = os.environ.get("SUPABASE_URL", "").strip()
+SUPABASE_KEY  = os.environ.get("SUPABASE_KEY", "").strip()
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "").strip()
+
+supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+openai_client   = openai.OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 BASE_DIR = os.path.dirname(__file__)
 
@@ -218,17 +228,78 @@ def build_context(question: str) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
+def search_supabase(question: str, match_count: int = 8) -> str:
+    """Supabase 벡터 검색 → 관련 내용 반환. 실패 시 텍스트 검색으로 fallback."""
+    # ── 벡터 검색 ──────────────────────────────────────
+    if supabase_client and openai_client:
+        try:
+            emb_resp = openai_client.embeddings.create(
+                model="text-embedding-ada-002",
+                input=question
+            )
+            embedding = emb_resp.data[0].embedding
+            result = supabase_client.rpc("match_documents", {
+                "query_embedding": embedding,
+                "match_threshold": 0.5,
+                "match_count": match_count
+            }).execute()
+            if result.data:
+                chunks = [r["content"] for r in result.data if r.get("content")]
+                if chunks:
+                    logger.info(f"Supabase 벡터 검색: {len(chunks)}개 청크")
+                    return "\n\n---\n\n".join(chunks)[:8000]
+        except Exception as e:
+            logger.warning(f"벡터 검색 실패, 텍스트 검색으로 전환: {e}")
+
+    # ── 텍스트 검색 fallback ───────────────────────────
+    if supabase_client:
+        try:
+            keywords = [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 2][:5]
+            all_chunks = []
+            seen = set()
+            for kw in keywords:
+                result = supabase_client.table("documents") \
+                    .select("content") \
+                    .ilike("content", f"%{kw}%") \
+                    .limit(4) \
+                    .execute()
+                if result.data:
+                    for row in result.data:
+                        c = row.get("content", "")
+                        key = c[:60]
+                        if key and key not in seen:
+                            seen.add(key)
+                            all_chunks.append(c)
+            if all_chunks:
+                logger.info(f"Supabase 텍스트 검색: {len(all_chunks)}개 청크")
+                return "\n\n---\n\n".join(all_chunks)[:8000]
+        except Exception as e:
+            logger.warning(f"텍스트 검색 실패: {e}")
+
+    return ""
+
+
+KAKAO_FORMAT = (
+    "【출력 형식 필수 준수】"
+    "카카오 채팅창(plain text)에 표시되므로 아래 규칙을 반드시 지키세요.\n"
+    "✗ 절대 사용 금지: 마크다운 표(|---|---|), 코드블록(```), # ## ### 헤더\n"
+    "✓ 허용 형식: 줄바꿈, 번호 목록(1. 2. 3.), 이모지(✅⚠️📌▶), 들여쓰기(공백 2칸)\n"
+    "답변 길이: 핵심 내용 위주로 작성하되 항목 목록은 빠짐없이 나열할 것\n\n"
+)
+
 SYSTEM_DETAIL = (
+    KAKAO_FORMAT +
     "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
-    "반드시 제공된 [평가 자료]에 있는 내용만 사용하여 답변하세요. 자료에 없는 내용은 절대 추측하거나 만들어 내지 마세요. "
-    "답변 형식: 📋 지표명과 번호로 시작 → ✅ 평가기준(각 항목별 번호/내용) → 🔍 확인방법 → ⚠️ 주의사항 순서로 구조화하세요. "
-    "각 항목은 줄바꿈으로 구분하고, 실무에 바로 활용할 수 있도록 구체적으로 작성하세요. "
+    "반드시 제공된 [평가 자료]에 있는 내용만 사용하여 답변하세요. 자료에 없는 내용은 절대 추측하거나 만들어 내지 마세요.\n"
+    "답변 구조: 📋 지표명/번호 → ✅ 평가기준(항목별) → 🔍 확인방법 → ⚠️ 주의사항\n"
+    "각 항목은 줄바꿈으로 구분하고, 실무에 바로 활용할 수 있도록 구체적으로 작성하세요.\n"
     "자료에서 확인되지 않는 내용은 '📌 자료에서 확인되지 않습니다'라고 명시하세요."
 )
 
 SYSTEM_FAST = (
+    KAKAO_FORMAT +
     "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
-    "반드시 제공된 [평가 자료]에 있는 내용만 사용하세요. 자료에 없는 내용은 추측하지 마세요. "
+    "반드시 제공된 [평가 자료]에 있는 내용만 사용하세요. 자료에 없는 내용은 추측하지 마세요.\n"
     "핵심 평가기준과 확인방법 위주로 간결하게 답변하고, 자료에 없으면 '자료에서 확인되지 않습니다'라고 하세요."
 )
 
@@ -318,15 +389,24 @@ def ask_claude(question: str, detailed: bool = False) -> str:
 
     # ── 구체적 질문 처리 ──────────────────────────────
     if is_detail:
-        # 컨텍스트: 캐시 답변(종합 정보) + 질문 특화 검색
+        # Supabase 우선 검색, 실패 시 로컬 PDF 검색
+        supabase_ctx = search_supabase(question)
         cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
-        extra = build_context(question)  # 질문 키워드 특화 검색
-        if cached and extra:
-            context = f"{extra}\n\n[해당 지표 종합 참고]\n{cached[:3000]}"
-        elif cached:
-            context = cached
+
+        if supabase_ctx:
+            # Supabase 결과 + 캐시 보조
+            context = supabase_ctx
+            if cached:
+                context += f"\n\n[지표 종합 참고]\n{cached[:2000]}"
         else:
-            context = extra
+            # fallback: 로컬 PDF 검색
+            extra = build_context(question)
+            if cached and extra:
+                context = f"{extra}\n\n[해당 지표 종합 참고]\n{cached[:3000]}"
+            elif cached:
+                context = cached
+            else:
+                context = extra
 
         system = (
             "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
