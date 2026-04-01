@@ -242,11 +242,10 @@ def build_context(question: str) -> str:
     return "\n\n".join(parts) if parts else ""
 
 
-def search_supabase(question: str, match_count: int = 8) -> str:
-    """Supabase 벡터 검색 → 관련 내용 반환. 실패 시 텍스트 검색으로 fallback."""
-    # ── 벡터 검색 ──────────────────────────────────────
-    if supabase_client and openai_client:
-        try:
+def _do_supabase_search(question: str, match_count: int, result_holder: list):
+    """별도 스레드에서 실행되는 Supabase 검색"""
+    try:
+        if supabase_client and openai_client:
             emb_resp = openai_client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=question
@@ -260,36 +259,40 @@ def search_supabase(question: str, match_count: int = 8) -> str:
             if result.data:
                 chunks = [r["content"] for r in result.data if r.get("content")]
                 if chunks:
-                    logger.info(f"Supabase 벡터 검색: {len(chunks)}개 청크")
-                    return "\n\n---\n\n".join(chunks)[:8000]
-        except Exception as e:
-            logger.warning(f"벡터 검색 실패, 텍스트 검색으로 전환: {e}")
-
-    # ── 텍스트 검색 fallback ───────────────────────────
-    if supabase_client:
-        try:
-            keywords = [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 2][:5]
-            all_chunks = []
-            seen = set()
+                    result_holder.append("\n\n---\n\n".join(chunks)[:8000])
+                    return
+        # 텍스트 검색 fallback
+        if supabase_client:
+            keywords = [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 2][:4]
+            all_chunks, seen = [], set()
             for kw in keywords:
-                result = supabase_client.table("documents") \
-                    .select("content") \
-                    .ilike("content", f"%{kw}%") \
-                    .limit(4) \
-                    .execute()
-                if result.data:
-                    for row in result.data:
+                res = supabase_client.table("documents").select("content") \
+                    .ilike("content", f"%{kw}%").limit(3).execute()
+                if res.data:
+                    for row in res.data:
                         c = row.get("content", "")
                         key = c[:60]
                         if key and key not in seen:
                             seen.add(key)
                             all_chunks.append(c)
             if all_chunks:
-                logger.info(f"Supabase 텍스트 검색: {len(all_chunks)}개 청크")
-                return "\n\n---\n\n".join(all_chunks)[:8000]
-        except Exception as e:
-            logger.warning(f"텍스트 검색 실패: {e}")
+                result_holder.append("\n\n---\n\n".join(all_chunks)[:8000])
+    except Exception as e:
+        logger.warning(f"Supabase 검색 오류: {e}")
 
+
+def search_supabase(question: str, match_count: int = 8, timeout: float = 8.0) -> str:
+    """Supabase 검색 (최대 8초 제한, 초과 시 빈 문자열 반환)"""
+    if not supabase_client:
+        return ""
+    result_holder = []
+    t = threading.Thread(target=_do_supabase_search, args=(question, match_count, result_holder), daemon=True)
+    t.start()
+    t.join(timeout=timeout)
+    if result_holder:
+        logger.info(f"Supabase 검색 성공: {len(result_holder[0])}자")
+        return result_holder[0]
+    logger.warning(f"Supabase 검색 타임아웃({timeout}s) 또는 결과 없음")
     return ""
 
 
