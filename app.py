@@ -281,8 +281,8 @@ def _do_supabase_search(question: str, match_count: int, result_holder: list):
         logger.warning(f"Supabase 검색 오류: {e}")
 
 
-def search_supabase(question: str, match_count: int = 8, timeout: float = 8.0) -> str:
-    """Supabase 검색 (최대 8초 제한, 초과 시 빈 문자열 반환)"""
+def search_supabase(question: str, match_count: int = 8, timeout: float = 5.0) -> str:
+    """Supabase 검색 (최대 5초 제한, 초과 시 빈 문자열 반환)"""
     if not supabase_client:
         return ""
     result_holder = []
@@ -292,7 +292,7 @@ def search_supabase(question: str, match_count: int = 8, timeout: float = 8.0) -
     if result_holder:
         logger.info(f"Supabase 검색 성공: {len(result_holder[0])}자")
         return result_holder[0]
-    logger.warning(f"Supabase 검색 타임아웃({timeout}s) 또는 결과 없음")
+    logger.warning(f"Supabase 검색 타임아웃({timeout}s) 또는 결과 없음 - 캐시/로컬 사용")
     return ""
 
 
@@ -430,8 +430,8 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             "답변은 실무 담당자가 바로 활용할 수 있도록 구체적으로 작성하세요.\n\n"
             f"[평가 자료]\n{context}"
         )
-        max_tok = 1500
-        timeout = 20.0   # 8s(Supabase) + 20s(Claude) = 28s → 30초 이내 완료
+        max_tok = 1200
+        timeout = 15.0   # 5s(Supabase) + 15s(Claude) + 2s(POST) = 22s → 30초 여유
         model = "claude-sonnet-4-6"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
@@ -543,9 +543,12 @@ def send_callback(callback_url, answer):
         "template": {"outputs": [{"simpleText": {"text": answer}}]}
     }
     try:
-        with httpx.Client(timeout=30.0) as http:
+        with httpx.Client(timeout=10.0) as http:
             resp = http.post(callback_url, json=payload)
-            logger.info(f"콜백 전송 완료: {resp.status_code}")
+            if resp.status_code == 200:
+                logger.info(f"콜백 전송 완료: {resp.status_code}")
+            else:
+                logger.error(f"콜백 실패 {resp.status_code}: {resp.text[:200]}")
     except Exception as e:
         logger.error(f"콜백 전송 실패: {e}")
 
