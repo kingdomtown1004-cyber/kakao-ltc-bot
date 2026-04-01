@@ -275,6 +275,28 @@ def find_keyword_answer(question: str) -> str | None:
     return None
 
 
+# 구체적/심층 질문 패턴 — 이 경우 캐시만 돌려주지 않고 Claude가 직접 답변
+DETAIL_PATTERNS = [
+    '어떻게', '어떤', '왜', '이유', '구체적', '자세히', '설명',
+    '예시', '예를 들', '예를들', '사례',
+    '기록', '서류', '서식', '장부', '일지', '계획서', '결과서',
+    '인정', '불인정', '인정되', '안 되', '안되', '없으면', '없을 때', '없을때',
+    '예외', '경우', '할 때', '할때', '하면', '해야', '해도 되',
+    '차이', '비교', '다른 점', '다른점',
+    '확인방법', '확인 방법', '어떻게 확인', '어떻게 보면',
+    '됩니까', '됩니까', '되나요', '맞나요', '가능한가요', '가능한지',
+    '몇 개', '몇개', '몇 번', '몇번', '얼마나', '몇 명', '몇명',
+    '누가', '언제', '어디', '어느',
+    '주의', '조심', '틀리기', '실수',
+    '방법', '절차', '순서', '기준',
+]
+
+
+def is_detail_question(question: str) -> bool:
+    """구체적/심층 질문 여부 — True면 캐시 대신 Claude가 직접 답변"""
+    return any(p in question for p in DETAIL_PATTERNS)
+
+
 def ask_claude(question: str, detailed: bool = False) -> str:
     ind = find_indicator(question)
 
@@ -283,54 +305,71 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     if keyword_ans:
         return keyword_ans
 
-    # 미리 생성된 캐시 답변 사용 (지표 관련 모든 질문 → 즉시 상세 답변)
-    if ind and str(ind["no"]) in INDICATOR_ANSWERS:
+    # 구체적 질문 여부 판단
+    is_detail = is_detail_question(question) or detailed
+
+    # 단순 지표 조회(번호만 물어볼 때) → 캐시 즉시 반환
+    if ind and str(ind["no"]) in INDICATOR_ANSWERS and not is_detail:
         return INDICATOR_ANSWERS[str(ind["no"])]
 
-    if detailed:
-        context = build_context(question)
-        system = f"{SYSTEM_DETAIL}\n\n[평가 자료]\n{context}"
+    # ── 구체적 질문 처리 ──────────────────────────────
+    if is_detail:
+        # 컨텍스트: 캐시 답변(종합 정보) + 질문 특화 검색
+        cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
+        extra = build_context(question)  # 질문 키워드 특화 검색
+        if cached and extra:
+            context = f"{extra}\n\n[해당 지표 종합 참고]\n{cached[:3000]}"
+        elif cached:
+            context = cached
+        else:
+            context = extra
+
+        system = (
+            "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
+            "반드시 아래 [평가 자료]에 있는 내용을 근거로 답변하세요. "
+            "사용자의 구체적인 질문에 직접 답변하되, "
+            "① 결론/핵심 답변 ② 근거(자료 내용) ③ 주의사항(있을 경우) 순서로 작성하세요. "
+            "자료에 명시되지 않은 내용은 '📌 자료에서 확인되지 않습니다'라고 하세요. "
+            "답변은 실무 담당자가 바로 활용할 수 있도록 구체적으로 작성하세요.\n\n"
+            f"[평가 자료]\n{context}"
+        )
         max_tok = 1500
-        timeout = 60.0
+        timeout = 55.0
+        model = "claude-sonnet-4-6"
+
+    # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
     else:
-        # 단순 지표 조회는 DB 즉시 답변
-        if ind and is_simple_lookup(question):
-            return format_db_answer(ind)
-        # 일반 질문은 Claude 사용 (타임아웃 2.5초)
         keywords = []
         if ind:
             keywords.append(ind["name"])
-            keywords += [c.lstrip("①②③④⑤").strip() for c in ind["criteria"]]
+            keywords += [c.lstrip("①②③④⑤⑥⑦⑧").strip() for c in ind["criteria"]]
         keywords += [w for w in re.findall(r'[가-힣]{2,}', question) if len(w) >= 3]
+
         if ind:
-            _parts = [
-                f"[지표 {ind['no']}번: {ind['name']}]",
-                f"평가기준: {', '.join(ind['criteria'])}",
-            ]
+            _parts = [f"[지표 {ind['no']}번: {ind['name']}]",
+                      f"평가기준: {', '.join(ind['criteria'])}"]
             if ind.get("detail"):
                 _parts.append(ind["detail"])
             _parts.append(f"적용 급여: {ind['note']}")
             ind_text = "\n".join(_parts)
         else:
             ind_text = ""
+
         priority_files = detect_care_type(question)
         relevant = search_text(keywords, max_chars=1500, priority_files=priority_files) if keywords else ""
-        parts = []
-        if ind_text:
-            parts.append(ind_text)
-        if relevant:
-            parts.append(f"[관련 자료]\n{relevant}")
+        parts = [p for p in [ind_text, f"[관련 자료]\n{relevant}" if relevant else ""] if p]
         context = "\n\n".join(parts)
         system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
         max_tok = 350
         timeout = 2.5
+        model = "claude-haiku-4-5"
 
     result_holder = []
 
     def _call():
         try:
             resp = ai.messages.create(
-                model="claude-haiku-4-5",
+                model=model,
                 max_tokens=max_tok,
                 system=system,
                 messages=[{"role": "user", "content": question}],
@@ -346,8 +385,10 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     if result_holder:
         return result_holder[0]
 
-    # 타임아웃 → DB 답변으로 대체
-    logger.warning(f"Claude 타임아웃({timeout}s), DB 대체 답변 사용")
+    # 타임아웃 → 캐시 또는 DB 답변으로 대체
+    logger.warning(f"Claude 타임아웃({timeout}s), 대체 답변 사용")
+    if ind and str(ind["no"]) in INDICATOR_ANSWERS:
+        return INDICATOR_ANSWERS[str(ind["no"])] + "\n\n📌 더 구체적인 답변을 준비 중입니다. 잠시 후 다시 질문해 주세요."
     ind2 = find_indicator(question)
     if ind2:
         return format_db_answer(ind2)
@@ -396,7 +437,22 @@ def skill():
             "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
         })
 
-    if callback_url:
+    # 구체적 질문이면 무조건 비동기(callback) 경로로 처리
+    use_async = callback_url and is_detail_question(question)
+
+    if use_async:
+        threading.Thread(
+            target=process_in_background,
+            args=(question, callback_url),
+            daemon=True
+        ).start()
+        return jsonify({
+            "version": "2.0",
+            "useCallback": True,
+            "data": {"text": "📝 구체적인 내용을 확인하고 있습니다...\n잠시만 기다려 주세요. (10~30초)"}
+        })
+    elif callback_url:
+        # callback 있지만 단순 질문 → 비동기로 처리 (기존 동작 유지)
         threading.Thread(
             target=process_in_background,
             args=(question, callback_url),
