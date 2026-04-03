@@ -96,11 +96,11 @@ def find_indicator(question: str):
 
     if num_match:
         no = int(next(g for g in num_match.groups() if g))
-        # 급여 유형이 명시된 경우 유형별 매핑 우선 적용
-        prefix = detect_care_prefix(question)
-        if prefix and no in CARE_TYPE_MAP.get(prefix, {}):
+        # 급여 유형 감지 (미지정 시 방문요양 기본값)
+        prefix = detect_care_prefix(question) or "요"
+        if no in CARE_TYPE_MAP.get(prefix, {}):
             return CARE_TYPE_MAP[prefix][no]
-        # 일반 지표 번호 매칭
+        # 일반 지표 번호 매칭 (fallback)
         for ind in INDICATOR_DB:
             if ind["no"] == no:
                 return ind
