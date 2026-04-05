@@ -13,6 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
+# v1.2.0 — 2026-04-05: CARE_TYPE_MAP 기반 지표번호 매핑 정식 적용
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
