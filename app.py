@@ -30,6 +30,7 @@ logging.basicConfig(
 # v1.3.4 — 2026-04-05: /debug 엔드포인트 추가
 # v1.3.5 — 2026-04-05: Sonnet→Haiku 변경 (응답속도 3~5s), 상세 로깅 추가
 # v1.3.6 — 2026-04-05: callbackUrl 없을 때 useCallback:true 반환 → 카카오 재요청 유도
+# v1.3.7 — 2026-04-05: 동기 경로 빠른 처리 (Supabase 생략, max_tok=500, timeout=4s)
 logger = logging.getLogger(__name__)
 logger.addHandler(_buf_handler)
 
@@ -438,13 +439,13 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     # 구체적 질문 여부 판단
     is_detail = is_detail_question(question) or detailed
 
-    # 단순 지표 조회(번호만 물어볼 때) → 캐시 즉시 반환 (clean_markdown 적용)
-    if ind and str(ind["no"]) in INDICATOR_ANSWERS and not is_detail:
+    # 동기 경로(detailed=False): 캐시 있으면 is_detail 무시하고 즉시 반환
+    if ind and str(ind["no"]) in INDICATOR_ANSWERS and not detailed:
         return clean_markdown(INDICATOR_ANSWERS[str(ind["no"])])
 
     # ── 구체적 질문 처리 ──────────────────────────────
-    if is_detail:
-        # Supabase 우선 검색, 실패 시 로컬 PDF 검색
+    if is_detail and detailed:
+        # 비동기 경로(callbackUrl 있음): 상세 처리
         supabase_ctx = search_supabase(question, match_count=6, timeout=3.0)
         cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
 
@@ -453,7 +454,6 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             if cached:
                 context += f"\n\n[지표 종합 참고]\n{cached[:2000]}"
         elif cached:
-            # Supabase 실패 → 캐시 + 로컬 검색 병용
             local_ctx = build_context(question)
             context = cached + (f"\n\n{local_ctx}" if local_ctx else "")
         else:
@@ -465,6 +465,20 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         )
         max_tok = 1200
         timeout = 15.0
+        model = "claude-haiku-4-5-20251001"
+
+    elif is_detail and not detailed:
+        # 동기 경로(callbackUrl 없음): 빠른 처리 — Supabase 없이 로컬만, 토큰 제한
+        local_ctx = build_context(question)
+        cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
+        parts = [p for p in [cached[:1500] if cached else "", local_ctx] if p]
+        context = "\n\n".join(parts)
+        system = (
+            SYSTEM_DETAIL +
+            f"\n[평가 자료]\n{context}"
+        )
+        max_tok = 500
+        timeout = 4.0
         model = "claude-haiku-4-5-20251001"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
@@ -648,7 +662,7 @@ def skill():
         })
 
     if callback_url:
-        # callbackUrl 있음 → 즉시 비동기 처리 시작
+        # callbackUrl 있음 → 비동기 처리
         logger.info(f"[ASYNC] callbackUrl 있음, 비동기 처리 시작")
         threading.Thread(
             target=process_in_background,
@@ -661,20 +675,30 @@ def skill():
             "data": {"text": "📝 답변을 확인하고 있습니다...\n잠시만 기다려 주세요."}
         })
     else:
-        # callbackUrl 없음 → useCallback:true 반환하면 카카오가 callbackUrl 포함해서 재요청
-        logger.info(f"[SYNC] callbackUrl 없음 → useCallback:true 반환 (카카오 재요청 유도)")
-        return jsonify({
-            "version": "2.0",
-            "useCallback": True,
-            "data": {"text": "📝 답변을 확인하고 있습니다...\n잠시만 기다려 주세요."}
-        })
+        # callbackUrl 없음 → 동기 처리 (4초 이내 응답)
+        logger.info(f"[SYNC] 동기 처리 시작")
+        try:
+            answer = get_answer(question, detailed=False)
+            if len(answer) > 4000:
+                answer = answer[:3990] + "\n\n...(이하 생략)"
+            logger.info(f"[SYNC] 응답 완료, 길이={len(answer)}")
+            return jsonify({
+                "version": "2.0",
+                "template": {"outputs": [{"simpleText": {"text": answer}}]}
+            })
+        except Exception as e:
+            logger.error(f"[SYNC] 오류: {e}")
+            return jsonify({
+                "version": "2.0",
+                "template": {"outputs": [{"simpleText": {"text": f"⚠️ 오류가 발생했습니다. 다시 시도해주세요."}}]}
+            })
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.6",
+        "version": "1.3.7",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
