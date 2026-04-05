@@ -14,6 +14,7 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 # v1.3.0 — 2026-04-05: 답변 품질 개선 - AI 자체 지식 허용, 토큰↑, 일반질문 Supabase 검색 추가
+# v1.3.3 — 2026-04-05: 구체적 질문 경로 타임아웃 단축 (Supabase 5s→3s, Claude 20s→12s) — 카카오 콜백 만료 방지
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -428,7 +429,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     # ── 구체적 질문 처리 ──────────────────────────────
     if is_detail:
         # Supabase 우선 검색, 실패 시 로컬 PDF 검색
-        supabase_ctx = search_supabase(question, match_count=10)
+        supabase_ctx = search_supabase(question, match_count=6, timeout=3.0)
         cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
 
         if supabase_ctx:
@@ -446,8 +447,8 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             SYSTEM_DETAIL +
             f"\n[평가 자료]\n{context}"
         )
-        max_tok = 2000
-        timeout = 20.0
+        max_tok = 1200
+        timeout = 12.0
         model = "claude-sonnet-4-6"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
