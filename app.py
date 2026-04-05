@@ -100,10 +100,11 @@ def find_indicator(question: str):
         prefix = detect_care_prefix(question) or "요"
         if no in CARE_TYPE_MAP.get(prefix, {}):
             return CARE_TYPE_MAP[prefix][no]
-        # 일반 지표 번호 매칭 (fallback)
-        for ind in INDICATOR_DB:
-            if ind["no"] == no:
-                return ind
+        # 급여유형 지정 없이 순수 번호만 입력된 경우에만 DB 번호 fallback 허용
+        if not detect_care_prefix(question):
+            for ind in INDICATOR_DB:
+                if ind["no"] == no:
+                    return ind
 
     # 이름 전체 매칭
     for ind in INDICATOR_DB:
