@@ -673,7 +673,7 @@ def skill():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.0",
+        "version": "1.3.3",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
