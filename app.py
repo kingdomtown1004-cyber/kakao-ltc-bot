@@ -13,7 +13,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
-# v1.2.0 — 2026-04-05: CARE_TYPE_MAP 기반 지표번호 매핑 정식 적용
+# v1.3.0 — 2026-04-05: 답변 품질 개선 - AI 자체 지식 허용, 토큰↑, 일반질문 Supabase 검색 추가
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
@@ -319,18 +319,22 @@ KAKAO_FORMAT = (
 
 SYSTEM_DETAIL = (
     KAKAO_FORMAT +
-    "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
-    "반드시 제공된 [평가 자료]에 있는 내용만 사용하여 답변하세요. 자료에 없는 내용은 절대 추측하거나 만들어 내지 마세요.\n"
-    "답변 구조: 📋 지표명/번호 → ✅ 평가기준(항목별) → 🔍 확인방법 → ⚠️ 주의사항\n"
+    "당신은 2026년 노인장기요양보험 재가장기요양기관 정기평가 전문 AI입니다.\n"
+    "답변 원칙:\n"
+    "1. 제공된 [평가 자료]에 관련 내용이 있으면 반드시 자료를 근거로 답변하세요.\n"
+    "2. 자료에 없는 내용이라도 장기요양보험 평가에 관한 전문 지식으로 최선을 다해 답변하세요. "
+    "이 경우 답변 끝에 '📌 공단 지침에서 재확인을 권장합니다' 표시를 추가하세요.\n"
+    "3. 장기요양보험 평가와 전혀 무관한 질문은 '장기요양 평가 관련 질문만 안내 가능합니다'라고 안내하세요.\n"
+    "답변 구조: 📋 핵심 답변 → ✅ 세부 내용(항목별) → 🔍 확인방법·서류 → ⚠️ 주의사항\n"
     "각 항목은 줄바꿈으로 구분하고, 실무에 바로 활용할 수 있도록 구체적으로 작성하세요.\n"
-    "자료에서 확인되지 않는 내용은 '📌 자료에서 확인되지 않습니다'라고 명시하세요."
 )
 
 SYSTEM_FAST = (
     KAKAO_FORMAT +
-    "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
-    "반드시 제공된 [평가 자료]에 있는 내용만 사용하세요. 자료에 없는 내용은 추측하지 마세요.\n"
-    "핵심 평가기준과 확인방법 위주로 간결하게 답변하고, 자료에 없으면 '자료에서 확인되지 않습니다'라고 하세요."
+    "당신은 2026년 노인장기요양보험 재가장기요양기관 정기평가 전문 AI입니다.\n"
+    "제공된 [평가 자료]를 근거로 답변하되, 자료에 없는 내용은 장기요양보험 평가 전문 지식으로 답변하고 "
+    "'📌 공단 지침에서 재확인 권장' 표시를 추가하세요.\n"
+    "핵심 내용 위주로 간결하게 작성하세요.\n"
 )
 
 
@@ -424,7 +428,7 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     # ── 구체적 질문 처리 ──────────────────────────────
     if is_detail:
         # Supabase 우선 검색, 실패 시 로컬 PDF 검색
-        supabase_ctx = search_supabase(question)
+        supabase_ctx = search_supabase(question, match_count=10)
         cached = INDICATOR_ANSWERS.get(str(ind["no"]), "") if ind else ""
 
         if supabase_ctx:
@@ -432,27 +436,25 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             if cached:
                 context += f"\n\n[지표 종합 참고]\n{cached[:2000]}"
         elif cached:
-            # Supabase 실패 → 캐시만 사용 (로컬 PDF 검색 생략으로 시간 단축)
-            context = cached
+            # Supabase 실패 → 캐시 + 로컬 검색 병용
+            local_ctx = build_context(question)
+            context = cached + (f"\n\n{local_ctx}" if local_ctx else "")
         else:
             context = build_context(question)
 
         system = (
-            KAKAO_FORMAT +
-            "당신은 2026년 노인장기요양보험 평가 전문가입니다. "
-            "반드시 아래 [평가 자료]에 있는 내용을 근거로 답변하세요. "
-            "사용자의 구체적인 질문에 직접 답변하되, "
-            "① 결론/핵심 답변 ② 근거(자료 내용) ③ 주의사항(있을 경우) 순서로 작성하세요. "
-            "자료에 명시되지 않은 내용은 '📌 자료에서 확인되지 않습니다'라고 하세요. "
-            "답변은 실무 담당자가 바로 활용할 수 있도록 구체적으로 작성하세요.\n\n"
-            f"[평가 자료]\n{context}"
+            SYSTEM_DETAIL +
+            f"\n[평가 자료]\n{context}"
         )
-        max_tok = 1200
-        timeout = 15.0   # 5s(Supabase) + 15s(Claude) + 2s(POST) = 22s → 30초 여유
+        max_tok = 2000
+        timeout = 20.0
         model = "claude-sonnet-4-6"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
     else:
+        # 일반 질문도 Supabase 검색 (빠른 버전: match_count 5, timeout 4s)
+        supabase_ctx = search_supabase(question, match_count=5, timeout=4.0)
+
         keywords = []
         if ind:
             keywords.append(ind["name"])
@@ -469,14 +471,20 @@ def ask_claude(question: str, detailed: bool = False) -> str:
         else:
             ind_text = ""
 
-        priority_files = detect_care_type(question)
-        relevant = search_text(keywords, max_chars=1500, priority_files=priority_files) if keywords else ""
-        parts = [p for p in [ind_text, f"[관련 자료]\n{relevant}" if relevant else ""] if p]
-        context = "\n\n".join(parts)
-        system = f"{SYSTEM_FAST}\n\n[평가 자료]\n{context}"
-        max_tok = 350
-        timeout = 2.5
-        model = "claude-haiku-4-5"
+        if supabase_ctx:
+            context = supabase_ctx
+            if ind_text:
+                context = ind_text + "\n\n" + context
+        else:
+            priority_files = detect_care_type(question)
+            relevant = search_text(keywords, max_chars=3000, priority_files=priority_files) if keywords else ""
+            parts = [p for p in [ind_text, f"[관련 자료]\n{relevant}" if relevant else ""] if p]
+            context = "\n\n".join(parts)
+
+        system = f"{SYSTEM_FAST}\n[평가 자료]\n{context}"
+        max_tok = 1000
+        timeout = 12.0
+        model = "claude-sonnet-4-6"
 
     result_holder = []
 
@@ -639,7 +647,7 @@ def skill():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.2.0",
+        "version": "1.3.0",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
