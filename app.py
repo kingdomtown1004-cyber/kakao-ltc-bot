@@ -9,13 +9,27 @@ from supabase import create_client
 
 from flask import Flask, request, jsonify
 
+from collections import deque
+
+# 최근 로그 200줄 메모리 보관
+_log_buffer = deque(maxlen=200)
+
+class _BufferHandler(logging.Handler):
+    def emit(self, record):
+        _log_buffer.append(self.format(record))
+
+_buf_handler = _BufferHandler()
+_buf_handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(message)s"))
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 # v1.3.0 — 2026-04-05: 답변 품질 개선 - AI 자체 지식 허용, 토큰↑, 일반질문 Supabase 검색 추가
 # v1.3.3 — 2026-04-05: 구체적 질문 경로 타임아웃 단축 (Supabase 5s→3s, Claude 20s→12s) — 카카오 콜백 만료 방지
+# v1.3.4 — 2026-04-05: /debug 엔드포인트 추가 (로그 확인용)
 logger = logging.getLogger(__name__)
+logger.addHandler(_buf_handler)
 
 app = Flask(__name__)
 
@@ -673,13 +687,18 @@ def skill():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.3",
+        "version": "1.3.4",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
         "care_type_요_2": CARE_TYPE_MAP.get("요", {}).get(2, {}).get("name", "MISSING"),
         "cache_key_31": "OK" if "31" in INDICATOR_ANSWERS else "MISSING",
     })
+
+
+@app.route("/debug", methods=["GET"])
+def debug_logs():
+    return "\n".join(_log_buffer), 200, {"Content-Type": "text/plain; charset=utf-8"}
 
 
 if __name__ == "__main__":
