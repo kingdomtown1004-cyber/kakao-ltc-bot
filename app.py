@@ -628,8 +628,12 @@ def skill():
 def health():
     return jsonify({
         "status": "ok",
+        "version": "1.2.0",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
+        "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
+        "care_type_요_2": CARE_TYPE_MAP.get("요", {}).get(2, {}).get("name", "MISSING"),
+        "cache_key_31": "OK" if "31" in INDICATOR_ANSWERS else "MISSING",
     })
 
 
