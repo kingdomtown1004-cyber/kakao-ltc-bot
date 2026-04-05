@@ -26,8 +26,9 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s"
 )
 # v1.3.0 — 2026-04-05: 답변 품질 개선 - AI 자체 지식 허용, 토큰↑, 일반질문 Supabase 검색 추가
-# v1.3.3 — 2026-04-05: 구체적 질문 경로 타임아웃 단축 (Supabase 5s→3s, Claude 20s→12s) — 카카오 콜백 만료 방지
-# v1.3.4 — 2026-04-05: /debug 엔드포인트 추가 (로그 확인용)
+# v1.3.3 — 2026-04-05: 구체적 질문 경로 타임아웃 단축 (Supabase 5s→3s, Claude 20s→12s)
+# v1.3.4 — 2026-04-05: /debug 엔드포인트 추가
+# v1.3.5 — 2026-04-05: Sonnet→Haiku 변경 (응답속도 3~5s), 상세 로깅 추가
 logger = logging.getLogger(__name__)
 logger.addHandler(_buf_handler)
 
@@ -462,8 +463,8 @@ def ask_claude(question: str, detailed: bool = False) -> str:
             f"\n[평가 자료]\n{context}"
         )
         max_tok = 1200
-        timeout = 12.0
-        model = "claude-sonnet-4-6"
+        timeout = 15.0
+        model = "claude-haiku-4-5-20251001"
 
     # ── 일반 질문 (지표 없거나 단순하지 않은 경우) ───
     else:
@@ -498,8 +499,8 @@ def ask_claude(question: str, detailed: bool = False) -> str:
 
         system = f"{SYSTEM_FAST}\n[평가 자료]\n{context}"
         max_tok = 1000
-        timeout = 12.0
-        model = "claude-sonnet-4-6"
+        timeout = 15.0
+        model = "claude-haiku-4-5-20251001"
 
     result_holder = []
 
@@ -601,29 +602,34 @@ def get_answer(question: str, detailed: bool = False) -> str:
 
 def send_callback(callback_url, answer):
     import httpx
+    if not callback_url:
+        logger.warning("send_callback: callbackUrl 없음, 전송 생략")
+        return
     if len(answer) > 4000:
         answer = answer[:3990] + "\n\n...(이하 생략)"
     payload = {
         "version": "2.0",
         "template": {"outputs": [{"simpleText": {"text": answer}}]}
     }
+    logger.info(f"[CB] 전송 시작: url={callback_url[:60]}")
     try:
         with httpx.Client(timeout=10.0) as http:
             resp = http.post(callback_url, json=payload)
-            if resp.status_code == 200:
-                logger.info(f"콜백 전송 완료: {resp.status_code}")
-            else:
-                logger.error(f"콜백 실패 {resp.status_code}: {resp.text[:200]}")
+            logger.info(f"[CB] 전송 완료: status={resp.status_code}")
+            if resp.status_code != 200:
+                logger.error(f"[CB] 실패: {resp.text[:200]}")
     except Exception as e:
-        logger.error(f"콜백 전송 실패: {e}")
+        logger.error(f"[CB] 전송 예외: {e}")
 
 
 def process_in_background(question, callback_url):
+    logger.info(f"[BG] 시작: {question[:40]}")
     try:
         answer = get_answer(question, detailed=True)
+        logger.info(f"[BG] 답변 생성 완료, 길이={len(answer)}")
         send_callback(callback_url, answer)
     except Exception as e:
-        logger.error(f"처리 오류: {e}")
+        logger.error(f"[BG] 처리 오류: {e}")
         send_callback(callback_url, "⚠️ 오류가 발생했습니다. 잠시 후 다시 시도해주세요.")
 
 
@@ -632,7 +638,7 @@ def skill():
     data = request.get_json()
     question = data.get("userRequest", {}).get("utterance", "")
     callback_url = data.get("userRequest", {}).get("callbackUrl", "")
-    logger.info(f"질문: {question[:50]}")
+    logger.info(f"질문: {question[:50]} | callback={'있음' if callback_url else '없음'}")
 
     if not question:
         return jsonify({
@@ -687,7 +693,7 @@ def skill():
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.4",
+        "version": "1.3.5",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
