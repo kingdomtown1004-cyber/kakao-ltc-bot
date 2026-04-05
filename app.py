@@ -29,6 +29,7 @@ logging.basicConfig(
 # v1.3.3 — 2026-04-05: 구체적 질문 경로 타임아웃 단축 (Supabase 5s→3s, Claude 20s→12s)
 # v1.3.4 — 2026-04-05: /debug 엔드포인트 추가
 # v1.3.5 — 2026-04-05: Sonnet→Haiku 변경 (응답속도 3~5s), 상세 로깅 추가
+# v1.3.6 — 2026-04-05: callbackUrl 없을 때 useCallback:true 반환 → 카카오 재요청 유도
 logger = logging.getLogger(__name__)
 logger.addHandler(_buf_handler)
 
@@ -646,10 +647,9 @@ def skill():
             "template": {"outputs": [{"simpleText": {"text": "질문을 입력해주세요."}}]}
         })
 
-    # 구체적 질문이면 무조건 비동기(callback) 경로로 처리
-    use_async = callback_url and is_detail_question(question)
-
-    if use_async:
+    if callback_url:
+        # callbackUrl 있음 → 즉시 비동기 처리 시작
+        logger.info(f"[ASYNC] callbackUrl 있음, 비동기 처리 시작")
         threading.Thread(
             target=process_in_background,
             args=(question, callback_url),
@@ -658,42 +658,23 @@ def skill():
         return jsonify({
             "version": "2.0",
             "useCallback": True,
-            "data": {"text": "📝 구체적인 내용을 확인하고 있습니다...\n잠시만 기다려 주세요. (10~30초)"}
-        })
-    elif callback_url:
-        # callback 있지만 단순 질문 → 비동기로 처리 (기존 동작 유지)
-        threading.Thread(
-            target=process_in_background,
-            args=(question, callback_url),
-            daemon=True
-        ).start()
-        return jsonify({
-            "version": "2.0",
-            "useCallback": True,
-            "data": {"text": "답변을 생성하고 있습니다... ⏳\n잠시만 기다려 주세요."}
+            "data": {"text": "📝 답변을 확인하고 있습니다...\n잠시만 기다려 주세요."}
         })
     else:
-        try:
-            answer = get_answer(question, detailed=False)
-            if len(answer) > 4000:
-                answer = answer[:3990] + "\n\n...(이하 생략)"
-            return jsonify({
-                "version": "2.0",
-                "template": {"outputs": [{"simpleText": {"text": answer}}]}
-            })
-        except Exception as e:
-            logger.error(f"오류: {e}")
-            return jsonify({
-                "version": "2.0",
-                "template": {"outputs": [{"simpleText": {"text": f"⚠️ 오류: {str(e)[:300]}"}}]}
-            })
+        # callbackUrl 없음 → useCallback:true 반환하면 카카오가 callbackUrl 포함해서 재요청
+        logger.info(f"[SYNC] callbackUrl 없음 → useCallback:true 반환 (카카오 재요청 유도)")
+        return jsonify({
+            "version": "2.0",
+            "useCallback": True,
+            "data": {"text": "📝 답변을 확인하고 있습니다...\n잠시만 기다려 주세요."}
+        })
 
 
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
         "status": "ok",
-        "version": "1.3.5",
+        "version": "1.3.6",
         "indicators": len(INDICATOR_DB),
         "questionnaire_chars": len(QUESTIONNAIRE_TEXT),
         "care_type_요_count": len(CARE_TYPE_MAP.get("요", {})),
