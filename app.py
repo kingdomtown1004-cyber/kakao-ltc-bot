@@ -112,10 +112,21 @@ def find_indicator(question: str):
         if ind["name"] in question:
             return ind
 
+    # 별칭(aliases) 매칭
+    for ind in INDICATOR_DB:
+        for alias in ind.get("aliases", []):
+            if alias in question:
+                return ind
+
     # 키워드 부분 매칭 (조사 포함 처리: 이름 단어가 질문에 substring으로 포함)
     best, best_score = None, 0
     for ind in INDICATOR_DB:
-        name_words = [w for w in re.findall(r'[가-힣]{2,}', ind["name"]) if len(w) >= 3]
+        # 이름 + 별칭 모두 검색 대상에 포함
+        search_terms = [ind["name"]] + ind.get("aliases", [])
+        all_words = []
+        for term in search_terms:
+            all_words += [w for w in re.findall(r'[가-힣]{2,}', term) if len(w) >= 2]
+        name_words = list(dict.fromkeys(all_words))  # 중복 제거
         if not name_words:
             continue
         matched = sum(1 for w in name_words if w in question)
@@ -123,7 +134,7 @@ def find_indicator(question: str):
         if matched >= 1 and score > best_score:
             best_score = score
             best = ind
-    if best and best_score >= 0.4:
+    if best and best_score >= 0.3:
         return best
 
     return None
