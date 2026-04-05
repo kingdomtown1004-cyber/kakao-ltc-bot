@@ -416,14 +416,14 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     # 키워드 기반 캐시 답변 (신설지표 등)
     keyword_ans = find_keyword_answer(question)
     if keyword_ans:
-        return keyword_ans
+        return clean_markdown(keyword_ans)
 
     # 구체적 질문 여부 판단
     is_detail = is_detail_question(question) or detailed
 
-    # 단순 지표 조회(번호만 물어볼 때) → 캐시 즉시 반환
+    # 단순 지표 조회(번호만 물어볼 때) → 캐시 즉시 반환 (clean_markdown 적용)
     if ind and str(ind["no"]) in INDICATOR_ANSWERS and not is_detail:
-        return INDICATOR_ANSWERS[str(ind["no"])]
+        return clean_markdown(INDICATOR_ANSWERS[str(ind["no"])])
 
     # ── 구체적 질문 처리 ──────────────────────────────
     if is_detail:
@@ -517,38 +517,63 @@ def ask_claude(question: str, detailed: bool = False) -> str:
     return "⚠️ 잠시 응답이 지연되고 있습니다. 다시 질문해 주세요."
 
 
+def table_to_text(table_lines: list) -> list:
+    """마크다운 테이블을 카카오 plain text로 변환 (삭제 금지)"""
+    rows = []
+    is_first = True
+    for line in table_lines:
+        stripped = line.strip()
+        # 구분선(|---|---) 건너뜀
+        if re.match(r'^[\|:\-\s]+$', stripped):
+            continue
+        cells = [c.strip() for c in stripped.strip('|').split('|')]
+        cells = [c for c in cells if c]
+        if not cells:
+            continue
+        if is_first:
+            is_first = False
+            continue  # 헤더 행 건너뜀
+        rows.append('  '.join(cells))
+    return rows
+
+
 def clean_markdown(text: str) -> str:
-    """Kakao plain text용 마크다운 제거"""
+    """Kakao plain text용 마크다운 정리 (테이블은 평문으로 변환)"""
     lines = text.splitlines()
     result = []
-    in_table = False
+    table_buf = []
     in_code = False
     for line in lines:
+        stripped = line.strip()
         # 코드블록 제거
-        if line.strip().startswith("```"):
+        if stripped.startswith("```"):
             in_code = not in_code
             continue
         if in_code:
             continue
-        # 테이블 행 제거 (|로 시작하거나 |---|--- 구분선)
-        stripped = line.strip()
-        if stripped.startswith("|") or re.match(r'^[\|:\-\s]+$', stripped):
-            in_table = True
+        # 테이블 행 수집
+        if stripped.startswith("|"):
+            table_buf.append(line)
             continue
-        else:
-            in_table = False
+        # 테이블 끝 → 평문으로 변환 후 추가
+        if table_buf:
+            result.extend(table_to_text(table_buf))
+            table_buf = []
         # # 헤더 → 일반 텍스트
         line = re.sub(r'^#{1,4}\s+', '', line)
-        # **bold** → 그대로 (가독성 유지)
+        # **bold** 제거
         line = re.sub(r'\*\*(.+?)\*\*', r'\1', line)
         # *italic* 제거
         line = re.sub(r'\*(.+?)\*', r'\1', line)
         # > 인용 제거
         line = re.sub(r'^>\s*', '', line)
-        # --- 구분선 제거
+        # --- 구분선 → 빈줄
         if re.match(r'^-{3,}$', stripped):
+            result.append('')
             continue
         result.append(line)
+    if table_buf:
+        result.extend(table_to_text(table_buf))
     # 연속 빈줄 정리
     cleaned = re.sub(r'\n{3,}', '\n\n', '\n'.join(result))
     return cleaned.strip()
